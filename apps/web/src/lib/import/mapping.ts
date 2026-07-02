@@ -1,7 +1,7 @@
 /**
  * xlsx列名 → 論理フィールドのマッピング。
- * 実ファイルの列構成が想定とズレている場合はここのエイリアスを追加する。
- * (実サンプル未受領のため仮エイリアス。受領後に要調整)
+ * Shopee一括アップロードテンプレート (ps_xxx|1|0 形式のフィールドコード) と
+ * 汎用的な日本語/英語ヘッダーの両方を自動判別する。
  */
 
 export type ProductField =
@@ -9,6 +9,7 @@ export type ProductField =
   | "title"
   | "description"
   | "price"
+  | "stock"
   | "category"
   | "ip_name"
   | "character_name"
@@ -27,30 +28,47 @@ export type CostField =
   | "width"
   | "height";
 
-/** ヘッダー正規化: 小文字化・空白/括弧/記号除去 */
+/** ヘッダー正規化: Shopeeの "|1|0" サフィックス除去・小文字化・空白/記号除去 */
 export function normalizeHeader(h: string): string {
   return h
+    .replace(/\|[\d|]+$/, "") // ps_product_name|1|0 → ps_product_name
     .toLowerCase()
     .replace(/[\s　_\-()（）:：*※]/g, "")
     .trim();
 }
 
+/**
+ * Shopeeカテゴリ ID → 内部カテゴリ名 (category_defaultsのキー)。
+ * ※現状の出品が全てフィギュアであることに基づく暫定マップ。必要に応じて追記する。
+ */
+export const SHOPEE_CATEGORY_MAP: Record<string, string> = {
+  "101392": "フィギュア",
+};
+
 const PRODUCT_ALIASES: Record<ProductField, string[]> = {
-  sku: ["sku", "商品id", "管理番号", "メルカリid", "itemid", "id"],
-  title: ["商品名", "タイトル", "title", "name", "商品タイトル"],
-  description: ["商品説明", "説明", "説明文", "description", "body", "商品詳細", "詳細"],
+  sku: [
+    "ps_sku_parent_short", "ps_sku_short",
+    "sku", "商品id", "管理番号", "メルカリid", "itemid", "id", "parent sku",
+  ],
+  title: ["ps_product_name", "商品名", "タイトル", "title", "product name", "name", "商品タイトル"],
+  description: [
+    "ps_product_description",
+    "商品説明", "説明", "説明文", "description", "product description", "body", "商品詳細", "詳細",
+  ],
   price: [
+    "ps_price",
     "想定売値", "売値", "販売価格", "価格", "price", "販売予定価格",
     "出品価格", "想定販売価格", "sellingprice",
   ],
-  category: ["カテゴリ", "カテゴリー", "category", "商品タイプ", "type", "ジャンル"],
+  stock: ["ps_stock", "在庫", "在庫数", "stock", "数量", "qty", "quantity"],
+  category: ["ps_category", "カテゴリ", "カテゴリー", "category", "商品タイプ", "ジャンル"],
   ip_name: ["作品名", "作品", "ip", "シリーズ", "series", "タイトル名"],
   character_name: ["キャラ名", "キャラクター", "キャラクター名", "character", "キャラ"],
-  weight: ["重量", "重さ", "weight", "重量g", "グラム", "weightg"],
+  weight: ["ps_weight", "重量", "重さ", "weight", "重量g", "重量kg", "グラム", "weightg"],
   dimensions: ["寸法", "サイズ", "dimensions", "size", "外寸"],
-  length: ["長さ", "縦", "奥行", "奥行き", "length", "depth"],
-  width: ["幅", "横", "width"],
-  height: ["高さ", "height"],
+  length: ["ps_length", "長さ", "縦", "奥行", "奥行き", "length", "depth"],
+  width: ["ps_width", "幅", "横", "width"],
+  height: ["ps_height", "高さ", "height"],
 };
 
 const COST_ALIASES: Record<CostField, string[]> = {
@@ -66,10 +84,28 @@ const COST_ALIASES: Record<CostField, string[]> = {
   height: ["高さ", "height"],
 };
 
-/** 画像URL列の判定 (Cover / 画像1..N / image_url 等、複数列対応) */
+/** Shopeeテンプレート固有で取込対象外の列 (unmapped警告を出さない)。
+ *  normalizeHeader後 (小文字・アンダースコア除去済み) の形に対して照合する */
+const IGNORED_HEADER_PATTERNS: RegExp[] = [
+  /^psmaximumpurchase/,
+  /^psminimumpurchase/,
+  /^ettitlevariation/,
+  /^ettitleoption/,
+  /^psnewsizechart/,
+  /^ettitlesizechart/,
+  /^channelid/,
+  /^psproductpreorder/,
+  /^ettitlereason/,
+  /^pshscode/,
+  /^pstaxcode/,
+  /^psbrand/,
+  /^pstoolmassupload/,
+];
+
+/** 画像URL列の判定 (Cover / 画像1..N / ps_item_image_N / image_url 等、複数列対応) */
 export function isImageHeader(h: string): boolean {
   const n = normalizeHeader(h);
-  return /画像|image|cover|photo|写真|img/.test(n) && !/サイズ|寸法/.test(n);
+  return /画像|image|cover|photo|写真|img/.test(n) && !/サイズ|寸法|sizechart/.test(n);
 }
 
 export interface HeaderMap<F extends string> {
@@ -79,6 +115,10 @@ export interface HeaderMap<F extends string> {
   imageColumns: string[];
   /** どのフィールドにも一致しなかったヘッダー */
   unmapped: string[];
+  /** 重量列の単位 (Shopeeはkg) */
+  weightUnit: "g" | "kg";
+  /** Shopeeテンプレート形式か (説明行スキップ等の挙動が変わる) */
+  isShopeeTemplate: boolean;
 }
 
 function buildMap<F extends string>(
@@ -89,6 +129,7 @@ function buildMap<F extends string>(
   const fields: Partial<Record<F, string>> = {};
   const imageColumns: string[] = [];
   const unmapped: string[] = [];
+  const isShopeeTemplate = headers.some((h) => /^(ps_|et_title_)/.test(h.trim()));
 
   for (const h of headers) {
     if (!h || !h.trim()) continue;
@@ -97,16 +138,22 @@ function buildMap<F extends string>(
       continue;
     }
     const n = normalizeHeader(h);
+    if (IGNORED_HEADER_PATTERNS.some((re) => re.test(n))) continue;
+
     let matched: F | null = null;
+    let aliasOfTakenField = false;
     for (const [field, list] of Object.entries(aliases) as [F, string[]][]) {
-      if (fields[field]) continue; // 先勝ち
       if (list.some((a) => n === normalizeHeader(a))) {
-        matched = field;
+        if (fields[field]) {
+          aliasOfTakenField = true; // 先勝ちで確定済み (例: ps_sku_parent_short → ps_sku_short)
+        } else {
+          matched = field;
+        }
         break;
       }
     }
-    // 完全一致しなければ部分一致で救済
-    if (!matched) {
+    // 完全一致しなければ部分一致で救済 (Shopeeフィールドコードは完全一致のみ)
+    if (!matched && !n.startsWith("ps") && !n.startsWith("ettitle")) {
       for (const [field, list] of Object.entries(aliases) as [F, string[]][]) {
         if (fields[field]) continue;
         if (list.some((a) => {
@@ -120,11 +167,16 @@ function buildMap<F extends string>(
     }
     if (matched) {
       fields[matched] = h;
-    } else {
+    } else if (!aliasOfTakenField) {
       unmapped.push(h);
     }
   }
-  return { fields, imageColumns, unmapped };
+
+  const weightHeader = (fields as Partial<Record<string, string>>)["weight"];
+  const wn = weightHeader ? normalizeHeader(weightHeader) : "";
+  const weightUnit: "g" | "kg" = wn === "psweight" || wn.includes("kg") ? "kg" : "g";
+
+  return { fields, imageColumns, unmapped, weightUnit, isShopeeTemplate };
 }
 
 export function mapProductHeaders(headers: string[]): HeaderMap<ProductField> {

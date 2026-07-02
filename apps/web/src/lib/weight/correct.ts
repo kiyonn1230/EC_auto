@@ -56,7 +56,8 @@ export function correctWeightAndDims(
   const isDummy = weightG !== null && dummyValues.includes(weightG);
   const isMissing = weightG === null || weightG <= 0;
 
-  if (input.weightSource === "measured" && !isDummy && !isMissing) {
+  // (B)実測・手動入力の値はダミー値と同値でも信頼して使う
+  if (input.weightSource === "measured" && !isMissing) {
     weightSource = "measured";
   } else if (isDummy || isMissing) {
     if (def) {
@@ -78,15 +79,17 @@ export function correctWeightAndDims(
   const dimsMissing =
     lengthCm === null || widthCm === null || heightCm === null ||
     lengthCm <= 0 || widthCm <= 0 || heightCm <= 0;
+  // Shopeeエクスポート等でよくある 1x1x1 のダミー寸法
+  const dimsDummy = lengthCm === 1 && widthCm === 1 && heightCm === 1;
 
   if (input.dimensionSource === "measured" && !dimsMissing) {
     dimensionSource = "measured";
-  } else if (dimsMissing) {
+  } else if (dimsMissing || dimsDummy) {
     if (def && def.default_length_cm && def.default_width_cm && def.default_height_cm) {
       lengthCm = def.default_length_cm;
       widthCm = def.default_width_cm;
       heightCm = def.default_height_cm;
-      dimensionSource = "category_default";
+      dimensionSource = dimsDummy ? "dummy_detected" : "category_default";
     } else {
       dimensionSource = "missing";
     }

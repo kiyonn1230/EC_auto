@@ -15,7 +15,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   domestic_shipping_jpy: 800,
   default_carrier: "EMS",
   volumetric_divisor: 6000,
-  dummy_weight_values: [0, 1, 999, 9999],
+  dummy_weight_values: [0, 1, 999, 1000, 9999],
   preorder_note_html:
     "<p>【予約商品 / Pre-order】ご注文確認後、日本国内で在庫を確保し2〜4週間以内に発送します。<br>This is a pre-order item. Ships from Japan within 2-4 weeks after stock confirmation.</p>",
   image_settings: {

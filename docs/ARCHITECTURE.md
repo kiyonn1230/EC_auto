@@ -71,6 +71,23 @@ Cost per item=仕入原価のストア通貨換算 / 説明文は `_x000d_` 除�
 `pricing_breakdown` に内訳を保存し UI に表示。売値・設定変更後は
 `POST /api/recalculate` で一括再計算。
 
+## 入力ファイル (A) の実仕様: Shopee一括アップロードテンプレート
+
+実サンプル (shopeesingaporeproducts_*.xlsx) は Shopee のマスアップロード形式:
+
+- 実データは `Template` シート (先頭シートは `Guidance`)。シートはヘッダーの
+  マッピング成立数と「必須フィールドが埋まった行数」のスコアで自動選択する
+- ヘッダーは `ps_product_name|1|0` 形式のフィールドコード (1行目)。
+  2〜6行目は メタ/英語ヘッダー/Mandatory表/ガイダンス文 のため、
+  「価格・在庫・重量・画像がどれも解釈できない行」をデータ外として除外する
+- 主なマッピング: `ps_sku_parent_short`→SKU / `ps_product_name`→商品名 /
+  `ps_price`→現状売値 (Shopee側通貨) / `ps_stock`→在庫 / `ps_category`→カテゴリID
+  (`SHOPEE_CATEGORY_MAP` で内部名へ変換, 例 101392→フィギュア)
+- **重量はkg単位** → g へ変換。`1` (=1000g) はダミー値として扱う
+- 寸法 `1x1x1` はダミーとして検知しカテゴリ既定値で補完
+- `ps_item_cover_image` + `ps_item_image_1..8` が画像列。
+  `dummyimage.com` 等のプレースホルダURLは除外して警告を出す
+
 ## データ制約 (厳守)
 
 - メルカリの item URL / 商品ページ / 内部API へのアクセスは実装しない。

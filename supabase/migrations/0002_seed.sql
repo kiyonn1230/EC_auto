@@ -11,7 +11,7 @@ insert into app_settings (key, value) values
   ('domestic_shipping_jpy', '800'),          -- 国内送料 (メルカリ→自宅/倉庫)
   ('default_carrier',       '"EMS"'),
   ('volumetric_divisor',    '6000'),         -- 容積重量 (cm3 / divisor = kg)
-  ('dummy_weight_values',   '[0, 1, 999, 9999]'),  -- ダミー重量とみなす値(g)
+  ('dummy_weight_values',   '[0, 1, 999, 1000, 9999]'),  -- ダミー重量とみなす値(g)。1000=Shopeeの1kgダミー
   ('preorder_note_html',
    '"<p>【予約商品 / Pre-order】ご注文確認後、日本国内で在庫を確保し2〜4週間以内に発送します。<br>This is a pre-order item. Ships from Japan within 2-4 weeks after stock confirmation.</p>"'),
   ('image_settings', '{
