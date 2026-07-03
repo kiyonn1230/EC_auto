@@ -8,6 +8,7 @@ export const metadata: Metadata = {
 };
 
 const NAV = [
+  { href: "/setup", label: "セットアップ" },
   { href: "/products", label: "商品一覧" },
   { href: "/import", label: "取込・検証" },
   { href: "/settings", label: "設定" },

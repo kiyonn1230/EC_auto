@@ -20,11 +20,13 @@ docs/              アーキテクチャ文書
 
 ## セットアップ
 
+**👉 初めての人は [docs/SETUP.md](docs/SETUP.md) のクリック単位の手順に従ってください。**
+起動後はダッシュボードの「セットアップ」ページが不足項目を自動チェックします。
+
 ### 1. Supabase
 
-新規プロジェクトを作成し、`supabase/migrations/` の SQL を順番に SQL Editor で実行
-(または `supabase db push`)。Storage バケット `product-images`(public)は
-マイグレーション内で作成される。
+新規プロジェクトを作成し、`supabase/setup.sql` を SQL Editor に貼り付けて実行
+(1ファイルでテーブル+シード+Storageバケットまで作成される)。
 
 ### 2. ダッシュボード (apps/web)
 
