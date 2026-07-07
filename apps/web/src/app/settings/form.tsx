@@ -5,21 +5,25 @@ import type {
   AppSettings,
   CategoryDefault,
   ComplianceKeyword,
+  Market,
   ShippingRate,
 } from "@/lib/types";
 
 export function SettingsForm({
   settings,
+  markets,
   categoryDefaults,
   shippingRates,
   keywords,
 }: {
   settings: AppSettings;
+  markets: Market[];
   categoryDefaults: CategoryDefault[];
   shippingRates: ShippingRate[];
   keywords: ComplianceKeyword[];
 }) {
   const [s, setS] = useState(settings);
+  const [mkts, setMkts] = useState(markets);
   const [cats, setCats] = useState(categoryDefaults);
   const [rates, setRates] = useState(shippingRates);
   const [kws, setKws] = useState(keywords);
@@ -35,6 +39,7 @@ export function SettingsForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           appSettings: s,
+          markets: mkts,
           categoryDefaults: cats,
           shippingRates: rates,
           keywords: kws,
@@ -57,21 +62,6 @@ export function SettingsForm({
     }
   };
 
-  const testShopify = async () => {
-    setBusy(true);
-    setMessage(null);
-    try {
-      const res = await fetch("/api/export/shopify");
-      const json = await res.json();
-      if (!res.ok || !json.ok) throw new Error(json.error ?? "接続失敗");
-      setMessage(`Shopify接続OK: ${json.shopName} (${json.domain})`);
-    } catch (e) {
-      setMessage(`Shopify接続エラー: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const num = (v: string) => (v === "" ? 0 : Number(v));
 
   return (
@@ -83,61 +73,78 @@ export function SettingsForm({
       )}
 
       <section className="rounded border border-gray-200 bg-white p-4">
-        <h3 className="text-sm font-bold mb-3">価格計算</h3>
+        <h3 className="text-sm font-bold mb-1">市場 (Shopeeマーケット)</h3>
+        <p className="text-xs text-gray-500 mb-3">
+          為替は「1通貨あたりの円」。手数料はShopeeの販売+決済+サービスの合計率。
+          
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs text-gray-600">
+              <tr>
+                <th className="p-1">コード</th>
+                <th className="p-1">通貨</th>
+                <th className="p-1">為替(JPY)</th>
+                <th className="p-1">手数料率</th>
+                <th className="p-1">目標粗利率</th>
+                <th className="p-1">送料キャリア</th>
+                <th className="p-1">国内費用¥</th>
+                <th className="p-1">表示在庫</th>
+                <th className="p-1">DTS日</th>
+                <th className="p-1">物流ch ID</th>
+                <th className="p-1">有効</th>
+              </tr>
+            </thead>
+            <tbody>
+              {mkts.map((m, i) => (
+                <tr key={m.code}>
+                  <td className="p-1 font-mono">{m.code}</td>
+                  <td className="p-1">
+                    <input value={m.currency} onChange={(e) => setMkts(mkts.map((x, j) => (j === i ? { ...x, currency: e.target.value.toUpperCase() } : x)))} className="input w-16" />
+                  </td>
+                  <td className="p-1">
+                    <input type="number" step="0.01" value={m.fx_rate_jpy} onChange={(e) => setMkts(mkts.map((x, j) => (j === i ? { ...x, fx_rate_jpy: num(e.target.value) } : x)))} className="input w-20" />
+                  </td>
+                  <td className="p-1">
+                    <input type="number" step="0.001" value={m.fee_rate} onChange={(e) => setMkts(mkts.map((x, j) => (j === i ? { ...x, fee_rate: num(e.target.value) } : x)))} className="input w-20" />
+                  </td>
+                  <td className="p-1">
+                    <input type="number" step="0.01" value={m.target_margin_rate} onChange={(e) => setMkts(mkts.map((x, j) => (j === i ? { ...x, target_margin_rate: num(e.target.value) } : x)))} className="input w-20" />
+                  </td>
+                  <td className="p-1">
+                    <input value={m.shipping_carrier} onChange={(e) => setMkts(mkts.map((x, j) => (j === i ? { ...x, shipping_carrier: e.target.value } : x)))} className="input w-24" />
+                  </td>
+                  <td className="p-1">
+                    <input type="number" value={m.domestic_cost_jpy} onChange={(e) => setMkts(mkts.map((x, j) => (j === i ? { ...x, domestic_cost_jpy: num(e.target.value) } : x)))} className="input w-20" />
+                  </td>
+                  <td className="p-1">
+                    <input type="number" value={m.default_stock} onChange={(e) => setMkts(mkts.map((x, j) => (j === i ? { ...x, default_stock: Math.round(num(e.target.value)) } : x)))} className="input w-16" />
+                  </td>
+                  <td className="p-1">
+                    <input type="number" value={m.days_to_ship} onChange={(e) => setMkts(mkts.map((x, j) => (j === i ? { ...x, days_to_ship: Math.round(num(e.target.value)) } : x)))} className="input w-16" />
+                  </td>
+                  <td className="p-1">
+                    <input type="number" value={m.logistics_channel_id ?? ""} onChange={(e) => setMkts(mkts.map((x, j) => (j === i ? { ...x, logistics_channel_id: e.target.value === "" ? null : Math.round(num(e.target.value)) } : x)))} className="input w-24" />
+                  </td>
+                  <td className="p-1 text-center">
+                    <input type="checkbox" checked={m.enabled} onChange={(e) => setMkts(mkts.map((x, j) => (j === i ? { ...x, enabled: e.target.checked } : x)))} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <AddMarket onAdd={(m) => setMkts([...mkts, m])} existing={mkts.map((m) => m.code)} />
+      </section>
+
+      <section className="rounded border border-gray-200 bg-white p-4">
+        <h3 className="text-sm font-bold mb-3">共通設定</h3>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
-          <Field label="ストア通貨">
-            <input
-              value={s.store_currency}
-              onChange={(e) => setS({ ...s, store_currency: e.target.value.toUpperCase() })}
-              className="input"
-            />
-          </Field>
-          <Field label={`為替 (JPY / 1 ${s.store_currency})`}>
-            <input
-              type="number" step="0.01"
-              value={s.fx_rate_jpy_per_store}
-              onChange={(e) => setS({ ...s, fx_rate_jpy_per_store: num(e.target.value) })}
-              className="input"
-            />
-          </Field>
-          <Field label="決済手数料率 (0.044 = 4.4%)">
-            <input
-              type="number" step="0.001"
-              value={s.payment_fee_rate}
-              onChange={(e) => setS({ ...s, payment_fee_rate: num(e.target.value) })}
-              className="input"
-            />
-          </Field>
-          <Field label="目標粗利率 (0.30 = 30%)">
-            <input
-              type="number" step="0.01"
-              value={s.target_margin_rate}
-              onChange={(e) => setS({ ...s, target_margin_rate: num(e.target.value) })}
-              className="input"
-            />
-          </Field>
-          <Field label="国内送料 (JPY)">
-            <input
-              type="number"
-              value={s.domestic_shipping_jpy}
-              onChange={(e) => setS({ ...s, domestic_shipping_jpy: num(e.target.value) })}
-              className="input"
-            />
-          </Field>
           <Field label="容積重量係数 (cm3/kg)">
-            <input
-              type="number"
-              value={s.volumetric_divisor}
-              onChange={(e) => setS({ ...s, volumetric_divisor: num(e.target.value) })}
-              className="input"
-            />
+            <input type="number" value={s.volumetric_divisor} onChange={(e) => setS({ ...s, volumetric_divisor: num(e.target.value) })} className="input" />
           </Field>
-          <Field label="既定キャリア">
-            <input
-              value={s.default_carrier}
-              onChange={(e) => setS({ ...s, default_carrier: e.target.value })}
-              className="input"
-            />
+          <Field label="Amazon側送料等 (JPY)">
+            <input type="number" value={s.amazon_domestic_shipping_jpy} onChange={(e) => setS({ ...s, amazon_domestic_shipping_jpy: num(e.target.value) })} className="input" />
           </Field>
           <Field label="ダミー重量値 (カンマ区切り)">
             <input
@@ -154,6 +161,14 @@ export function SettingsForm({
               className="input"
             />
           </Field>
+          <Field label="発送目安の定型文 (説明文末尾に追加)">
+            <textarea
+              value={s.shipping_note_text}
+              onChange={(e) => setS({ ...s, shipping_note_text: e.target.value })}
+              rows={2}
+              className="input"
+            />
+          </Field>
         </div>
       </section>
 
@@ -163,15 +178,7 @@ export function SettingsForm({
           <Field label="背景除去プロバイダ">
             <select
               value={s.image_settings.bg_removal_provider}
-              onChange={(e) =>
-                setS({
-                  ...s,
-                  image_settings: {
-                    ...s.image_settings,
-                    bg_removal_provider: e.target.value as "rembg" | "external_api",
-                  },
-                })
-              }
+              onChange={(e) => setS({ ...s, image_settings: { ...s.image_settings, bg_removal_provider: e.target.value as "rembg" | "external_api" } })}
               className="input bg-white"
             >
               <option value="rembg">rembg (ローカル)</option>
@@ -181,12 +188,7 @@ export function SettingsForm({
           <Field label="rembgモデル">
             <select
               value={s.image_settings.bg_removal_model}
-              onChange={(e) =>
-                setS({
-                  ...s,
-                  image_settings: { ...s.image_settings, bg_removal_model: e.target.value },
-                })
-              }
+              onChange={(e) => setS({ ...s, image_settings: { ...s.image_settings, bg_removal_model: e.target.value } })}
               className="input bg-white"
             >
               <option value="u2net">u2net</option>
@@ -195,158 +197,61 @@ export function SettingsForm({
             </select>
           </Field>
           <Field label="キャンバスサイズ (px)">
-            <input
-              type="number"
-              value={s.image_settings.canvas_size}
-              onChange={(e) =>
-                setS({
-                  ...s,
-                  image_settings: { ...s.image_settings, canvas_size: num(e.target.value) },
-                })
-              }
-              className="input"
-            />
+            <input type="number" value={s.image_settings.canvas_size} onChange={(e) => setS({ ...s, image_settings: { ...s.image_settings, canvas_size: num(e.target.value) } })} className="input" />
           </Field>
           <Field label="余白率 (0.06 = 6%)">
-            <input
-              type="number" step="0.01"
-              value={s.image_settings.margin_ratio}
-              onChange={(e) =>
-                setS({
-                  ...s,
-                  image_settings: { ...s.image_settings, margin_ratio: num(e.target.value) },
-                })
-              }
-              className="input"
-            />
+            <input type="number" step="0.01" value={s.image_settings.margin_ratio} onChange={(e) => setS({ ...s, image_settings: { ...s.image_settings, margin_ratio: num(e.target.value) } })} className="input" />
           </Field>
-          <Check
-            label="サブ画像は透過PNGも生成"
-            checked={s.image_settings.sub_transparent}
-            onChange={(v) =>
-              setS({ ...s, image_settings: { ...s.image_settings, sub_transparent: v } })
-            }
-          />
-          <Check
-            label="ウォーターマーク"
-            checked={s.image_settings.watermark_enabled}
-            onChange={(v) =>
-              setS({ ...s, image_settings: { ...s.image_settings, watermark_enabled: v } })
-            }
-          />
+          <Check label="サブ画像は透過PNGも生成" checked={s.image_settings.sub_transparent} onChange={(v) => setS({ ...s, image_settings: { ...s.image_settings, sub_transparent: v } })} />
+          <Check label="ウォーターマーク" checked={s.image_settings.watermark_enabled} onChange={(v) => setS({ ...s, image_settings: { ...s.image_settings, watermark_enabled: v } })} />
           <Field label="ウォーターマーク文字列">
-            <input
-              value={s.image_settings.watermark_text}
-              onChange={(e) =>
-                setS({
-                  ...s,
-                  image_settings: { ...s.image_settings, watermark_text: e.target.value },
-                })
-              }
-              className="input"
-            />
+            <input value={s.image_settings.watermark_text} onChange={(e) => setS({ ...s, image_settings: { ...s.image_settings, watermark_text: e.target.value } })} className="input" />
           </Field>
-          <Check
-            label="ライフスタイル背景生成 (生成AI, 既定OFF)"
-            checked={s.image_settings.lifestyle_enabled}
-            onChange={(v) =>
-              setS({ ...s, image_settings: { ...s.image_settings, lifestyle_enabled: v } })
-            }
-          />
         </div>
+        <p className="mt-2 text-xs text-gray-500">
+          ※Amazonの商品画像は出品者・メーカーに権利があります。加工しても権利問題は消えないため、
+          可能な限り自前で撮影した画像や権利者の許諾がある画像を使ってください。
+        </p>
       </section>
 
       <section className="rounded border border-gray-200 bg-white p-4">
-        <h3 className="text-sm font-bold mb-3">Shopify出力</h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
-          <Field label="Vendor">
-            <input
-              value={s.shopify_settings.vendor}
-              onChange={(e) =>
-                setS({ ...s, shopify_settings: { ...s.shopify_settings, vendor: e.target.value } })
-              }
-              className="input"
-            />
-          </Field>
-          <Field label="既定Type">
-            <input
-              value={s.shopify_settings.default_product_type}
-              onChange={(e) =>
-                setS({
-                  ...s,
-                  shopify_settings: { ...s.shopify_settings, default_product_type: e.target.value },
-                })
-              }
-              className="input"
-            />
-          </Field>
-          <Field label="既定Status">
-            <select
-              value={s.shopify_settings.default_status}
-              onChange={(e) =>
-                setS({
-                  ...s,
-                  shopify_settings: {
-                    ...s.shopify_settings,
-                    default_status: e.target.value as "draft" | "active",
-                  },
-                })
-              }
-              className="input bg-white"
-            >
-              <option value="draft">draft (推奨)</option>
-              <option value="active">active</option>
-            </select>
-          </Field>
-          <Field label="在庫ポリシー">
-            <select
-              value={s.shopify_settings.inventory_policy}
-              onChange={(e) =>
-                setS({
-                  ...s,
-                  shopify_settings: {
-                    ...s.shopify_settings,
-                    inventory_policy: e.target.value as "continue" | "deny",
-                  },
-                })
-              }
-              className="input bg-white"
-            >
-              <option value="continue">continue (予約販売: 在庫切れでも販売)</option>
-              <option value="deny">deny</option>
-            </select>
-          </Field>
-          <Field label="出力モード既定">
-            <select
-              value={s.shopify_settings.output_mode}
-              onChange={(e) =>
-                setS({
-                  ...s,
-                  shopify_settings: {
-                    ...s.shopify_settings,
-                    output_mode: e.target.value as "csv" | "api",
-                  },
-                })
-              }
-              className="input bg-white"
-            >
-              <option value="api">Admin API (推奨)</option>
-              <option value="csv">CSV</option>
-            </select>
-          </Field>
-        </div>
-        <div className="mt-3 flex items-center gap-3">
-          <button
-            onClick={testShopify}
-            disabled={busy}
-            className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm hover:bg-gray-100 disabled:opacity-50"
-          >
-            接続テスト
-          </button>
-          <p className="text-xs text-gray-500">
-            ストアドメイン・アクセストークンは .env で管理します (この画面では変更できません)
-          </p>
-        </div>
+        <h3 className="text-sm font-bold mb-3">国際送料テーブル (キャリア別)</h3>
+        <table className="w-full text-sm">
+          <thead className="text-left text-xs text-gray-600">
+            <tr>
+              <th className="p-1">キャリア</th>
+              <th className="p-1">重量From(g)</th>
+              <th className="p-1">重量To(g)</th>
+              <th className="p-1">料金(JPY)</th>
+              <th className="p-1"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rates.map((r, i) => (
+              <tr key={i}>
+                <td className="p-1">
+                  <input value={r.carrier} onChange={(e) => setRates(rates.map((x, j) => (j === i ? { ...x, carrier: e.target.value } : x)))} className="input w-28" />
+                </td>
+                {(["weight_from_g", "weight_to_g", "price_jpy"] as const).map((f) => (
+                  <td key={f} className="p-1">
+                    <input type="number" value={r[f]} onChange={(e) => setRates(rates.map((x, j) => (j === i ? { ...x, [f]: Number(e.target.value) } : x)))} className="input w-28" />
+                  </td>
+                ))}
+                <td className="p-1">
+                  <button onClick={() => setRates(rates.filter((_, j) => j !== i))} className="text-xs text-red-600 hover:underline">
+                    削除
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <button
+          onClick={() => setRates([...rates, { carrier: "SLS-SG", weight_from_g: 0, weight_to_g: 0, price_jpy: 0 }])}
+          className="mt-2 text-xs text-blue-700 hover:underline"
+        >
+          + 行を追加
+        </button>
       </section>
 
       <section className="rounded border border-gray-200 bg-white p-4">
@@ -366,91 +271,20 @@ export function SettingsForm({
             {cats.map((c, i) => (
               <tr key={i}>
                 <td className="p-1">
-                  <input
-                    value={c.category}
-                    onChange={(e) => setCats(cats.map((x, j) => (j === i ? { ...x, category: e.target.value } : x)))}
-                    className="input"
-                  />
+                  <input value={c.category} onChange={(e) => setCats(cats.map((x, j) => (j === i ? { ...x, category: e.target.value } : x)))} className="input" />
                 </td>
-                {(["default_weight_g", "default_length_cm", "default_width_cm", "default_height_cm"] as const).map(
-                  (f) => (
-                    <td key={f} className="p-1">
-                      <input
-                        type="number"
-                        value={c[f] ?? ""}
-                        onChange={(e) =>
-                          setCats(
-                            cats.map((x, j) =>
-                              j === i ? { ...x, [f]: e.target.value === "" ? null : Number(e.target.value) } : x
-                            )
-                          )
-                        }
-                        className="input w-20"
-                      />
-                    </td>
-                  )
-                )}
-                <td className="p-1">
-                  <button
-                    onClick={() => setCats(cats.filter((_, j) => j !== i))}
-                    className="text-xs text-red-600 hover:underline"
-                  >
-                    削除
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <button
-          onClick={() =>
-            setCats([...cats, { category: "", default_weight_g: 500, default_length_cm: null, default_width_cm: null, default_height_cm: null }])
-          }
-          className="mt-2 text-xs text-blue-700 hover:underline"
-        >
-          + 行を追加
-        </button>
-      </section>
-
-      <section className="rounded border border-gray-200 bg-white p-4">
-        <h3 className="text-sm font-bold mb-3">国際送料テーブル</h3>
-        <table className="w-full text-sm">
-          <thead className="text-left text-xs text-gray-600">
-            <tr>
-              <th className="p-1">キャリア</th>
-              <th className="p-1">重量From(g)</th>
-              <th className="p-1">重量To(g)</th>
-              <th className="p-1">料金(JPY)</th>
-              <th className="p-1"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rates.map((r, i) => (
-              <tr key={i}>
-                <td className="p-1">
-                  <input
-                    value={r.carrier}
-                    onChange={(e) => setRates(rates.map((x, j) => (j === i ? { ...x, carrier: e.target.value } : x)))}
-                    className="input w-24"
-                  />
-                </td>
-                {(["weight_from_g", "weight_to_g", "price_jpy"] as const).map((f) => (
+                {(["default_weight_g", "default_length_cm", "default_width_cm", "default_height_cm"] as const).map((f) => (
                   <td key={f} className="p-1">
                     <input
                       type="number"
-                      value={r[f]}
-                      onChange={(e) =>
-                        setRates(rates.map((x, j) => (j === i ? { ...x, [f]: Number(e.target.value) } : x)))
-                      }
-                      className="input w-28"
+                      value={c[f] ?? ""}
+                      onChange={(e) => setCats(cats.map((x, j) => (j === i ? { ...x, [f]: e.target.value === "" ? null : Number(e.target.value) } : x)))}
+                      className="input w-20"
                     />
                   </td>
                 ))}
                 <td className="p-1">
-                  <button
-                    onClick={() => setRates(rates.filter((_, j) => j !== i))}
-                    className="text-xs text-red-600 hover:underline"
-                  >
+                  <button onClick={() => setCats(cats.filter((_, j) => j !== i))} className="text-xs text-red-600 hover:underline">
                     削除
                   </button>
                 </td>
@@ -459,9 +293,7 @@ export function SettingsForm({
           </tbody>
         </table>
         <button
-          onClick={() =>
-            setRates([...rates, { carrier: s.default_carrier, weight_from_g: 0, weight_to_g: 0, price_jpy: 0 }])
-          }
+          onClick={() => setCats([...cats, { category: "", default_weight_g: 500, default_length_cm: null, default_width_cm: null, default_height_cm: null }])}
           className="mt-2 text-xs text-blue-700 hover:underline"
         >
           + 行を追加
@@ -483,22 +315,12 @@ export function SettingsForm({
             {kws.map((k, i) => (
               <tr key={i}>
                 <td className="p-1">
-                  <input
-                    value={k.keyword}
-                    onChange={(e) => setKws(kws.map((x, j) => (j === i ? { ...x, keyword: e.target.value } : x)))}
-                    className="input"
-                  />
+                  <input value={k.keyword} onChange={(e) => setKws(kws.map((x, j) => (j === i ? { ...x, keyword: e.target.value } : x)))} className="input" />
                 </td>
                 <td className="p-1">
                   <select
                     value={k.flag_type}
-                    onChange={(e) =>
-                      setKws(
-                        kws.map((x, j) =>
-                          j === i ? { ...x, flag_type: e.target.value as ComplianceKeyword["flag_type"] } : x
-                        )
-                      )
-                    }
+                    onChange={(e) => setKws(kws.map((x, j) => (j === i ? { ...x, flag_type: e.target.value as ComplianceKeyword["flag_type"] } : x)))}
                     className="input bg-white"
                   >
                     <option value="ip_caution">IP注意</option>
@@ -507,17 +329,10 @@ export function SettingsForm({
                   </select>
                 </td>
                 <td className="p-1">
-                  <input
-                    value={k.note ?? ""}
-                    onChange={(e) => setKws(kws.map((x, j) => (j === i ? { ...x, note: e.target.value } : x)))}
-                    className="input"
-                  />
+                  <input value={k.note ?? ""} onChange={(e) => setKws(kws.map((x, j) => (j === i ? { ...x, note: e.target.value } : x)))} className="input" />
                 </td>
                 <td className="p-1">
-                  <button
-                    onClick={() => setKws(kws.filter((_, j) => j !== i))}
-                    className="text-xs text-red-600 hover:underline"
-                  >
+                  <button onClick={() => setKws(kws.filter((_, j) => j !== i))} className="text-xs text-red-600 hover:underline">
                     削除
                   </button>
                 </td>
@@ -549,6 +364,45 @@ export function SettingsForm({
           保存して全件再計算
         </button>
       </div>
+    </div>
+  );
+}
+
+function AddMarket({ onAdd, existing }: { onAdd: (m: Market) => void; existing: string[] }) {
+  const [code, setCode] = useState("");
+  return (
+    <div className="mt-2 flex items-center gap-2 text-xs">
+      <input
+        value={code}
+        onChange={(e) => setCode(e.target.value.toUpperCase())}
+        placeholder="MY"
+        maxLength={3}
+        className="input w-16"
+      />
+      <button
+        onClick={() => {
+          const c = code.trim();
+          if (!c || existing.includes(c)) return;
+          onAdd({
+            code: c,
+            name: `Shopee ${c}`,
+            currency: c === "MY" ? "MYR" : c === "TH" ? "THB" : c === "PH" ? "PHP" : "USD",
+            fx_rate_jpy: 30,
+            fee_rate: 0.1,
+            target_margin_rate: 0.3,
+            shipping_carrier: `SLS-${c}`,
+            domestic_cost_jpy: 0,
+            default_stock: 1,
+            days_to_ship: 7,
+            logistics_channel_id: null,
+            enabled: true,
+          });
+          setCode("");
+        }}
+        className="text-blue-700 hover:underline"
+      >
+        + 市場を追加
+      </button>
     </div>
   );
 }

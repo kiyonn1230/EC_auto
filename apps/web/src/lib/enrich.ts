@@ -1,18 +1,17 @@
-import type { Product } from "@/lib/types";
+import type { Market, MarketListing, Product } from "@/lib/types";
 import type { EnrichContext } from "@/lib/settings";
 import { correctWeightAndDims } from "@/lib/weight/correct";
-import { calculatePricing } from "@/lib/pricing/engine";
+import { calculateMarketPricing } from "@/lib/pricing/engine";
 import { checkCompliance } from "@/lib/compliance/check";
 
 /**
- * 商品1件に対して 重量補正 → 粗利計算 → コンプラ検査 を実行し、
- * products への更新パッチを返す (取込時と一括再計算で共用)。
+ * 商品レベルの補正: 重量寸法補完 + コンプラ検査。
+ * products への更新パッチを返す (取込時と一括再計算で共用)
  */
 export function enrichProduct(
   p: Pick<
     Product,
     | "title" | "description_raw" | "category" | "ip_name" | "character_name"
-    | "purchase_price_jpy" | "current_listed_price"
     | "weight_g" | "weight_source"
     | "length_cm" | "width_cm" | "height_cm" | "dimension_source"
   >,
@@ -30,19 +29,6 @@ export function enrichProduct(
     },
     ctx.categoryDefaults,
     ctx.settings.dummy_weight_values
-  );
-
-  const pricing = calculatePricing(
-    {
-      purchasePriceJpy: p.purchase_price_jpy,
-      currentListedPrice: p.current_listed_price,
-      weightG: w.weightG,
-      lengthCm: w.lengthCm,
-      widthCm: w.widthCm,
-      heightCm: w.heightCm,
-    },
-    ctx.settings,
-    ctx.shippingRates
   );
 
   const compliance = checkCompliance(
@@ -63,14 +49,43 @@ export function enrichProduct(
     width_cm: w.widthCm,
     height_cm: w.heightCm,
     dimension_source: w.dimensionSource,
-    recommended_price: pricing.recommendedPrice,
-    gross_margin_amount: pricing.grossMarginAmount,
-    gross_margin_rate: pricing.grossMarginRate,
-    margin_alert: pricing.marginAlert,
-    pricing_breakdown: pricing.breakdown,
     compliance_ip_caution: compliance.ipCaution,
     compliance_bootleg_suspect: compliance.bootlegSuspect,
     compliance_restricted_item: compliance.restrictedItem,
     compliance_notes: compliance.notes,
+  };
+}
+
+/**
+ * 市場別出品の価格計算パッチ。
+ * enrichProduct 適用後の商品値 (補正済み重量) を渡すこと
+ */
+export function computeListingPatch(
+  product: Pick<
+    Product,
+    "purchase_price_jpy" | "weight_g" | "length_cm" | "width_cm" | "height_cm"
+  >,
+  market: Market,
+  existing: Pick<MarketListing, "listed_price"> | null,
+  ctx: EnrichContext
+): Partial<MarketListing> {
+  const pricing = calculateMarketPricing(
+    {
+      purchasePriceJpy: product.purchase_price_jpy,
+      listedPrice: existing?.listed_price ?? null,
+      weightG: product.weight_g,
+      lengthCm: product.length_cm,
+      widthCm: product.width_cm,
+      heightCm: product.height_cm,
+    },
+    market,
+    ctx.settings,
+    ctx.shippingRates
+  );
+  return {
+    recommended_price: pricing.recommendedPrice,
+    gross_margin_rate: pricing.grossMarginRate,
+    margin_alert: pricing.marginAlert,
+    pricing_breakdown: pricing.breakdown,
   };
 }

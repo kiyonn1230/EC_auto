@@ -1,31 +1,40 @@
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { loadSettings } from "@/lib/settings";
-import type { Product, ProductImage } from "@/lib/types";
+import type { Market, MarketListing, Product, ProductImage } from "@/lib/types";
 import { ProductsTable, type ProductRow } from "./table";
 
 export const dynamic = "force-dynamic";
 
 export default async function ProductsPage() {
   let rows: ProductRow[] = [];
-  let currency = "USD";
+  let markets: Market[] = [];
   let loadError: string | null = null;
 
   try {
     const sb = supabaseAdmin();
-    const [productsRes, imagesRes, settings] = await Promise.all([
+    const [productsRes, listingsRes, imagesRes, marketsRes] = await Promise.all([
       sb.from("products").select("*").order("created_at", { ascending: false }),
+      sb.from("market_listings").select("*"),
       sb.from("product_images").select("id, product_id, status"),
-      loadSettings(),
+      sb.from("markets").select("*").eq("enabled", true).order("code"),
     ]);
     if (productsRes.error) throw new Error(productsRes.error.message);
+    if (listingsRes.error) throw new Error(listingsRes.error.message);
     if (imagesRes.error) throw new Error(imagesRes.error.message);
-    currency = settings.store_currency;
+    if (marketsRes.error) throw new Error(marketsRes.error.message);
 
+    markets = (marketsRes.data ?? []) as Market[];
+    const listings = (listingsRes.data ?? []) as MarketListing[];
     const images = (imagesRes.data ?? []) as Pick<ProductImage, "id" | "product_id" | "status">[];
+
     rows = ((productsRes.data ?? []) as Product[]).map((p) => {
       const imgs = images.filter((i) => i.product_id === p.id);
+      const byMarket: ProductRow["listings"] = {};
+      for (const l of listings.filter((l) => l.product_id === p.id)) {
+        byMarket[l.market_code] = l;
+      }
       return {
         ...p,
+        listings: byMarket,
         image_total: imgs.length,
         image_success: imgs.filter((i) => i.status === "success").length,
         image_failed: imgs.filter((i) => i.status === "failed" || i.status === "manual_required").length,
@@ -40,15 +49,15 @@ export default async function ProductsPage() {
 
   return (
     <div>
-      <h2 className="text-lg font-bold mb-4">商品一覧</h2>
+      <h2 className="text-lg font-bold mb-4">商品一覧 (Amazon仕入れ → Shopee)</h2>
       {loadError ? (
         <div className="rounded border border-red-300 bg-red-50 p-4 text-sm text-red-800">
           データ取得に失敗しました: {loadError}
           <br />
-          Supabase接続設定 (.env.local) とマイグレーション適用を確認してください。
+          「セットアップ」ページで接続とマイグレーション適用状況を確認してください。
         </div>
       ) : (
-        <ProductsTable rows={rows} currency={currency} />
+        <ProductsTable rows={rows} markets={markets} />
       )}
     </div>
   );

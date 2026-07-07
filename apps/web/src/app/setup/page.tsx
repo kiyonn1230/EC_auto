@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { testConnection } from "@/lib/shopify/admin-api";
 
 export const dynamic = "force-dynamic";
 
@@ -31,37 +30,41 @@ async function runChecks(): Promise<Check[]> {
   if (!hasUrl || !hasKey) {
     checks.push(
       { name: "2. データベース (マイグレーション)", status: "skip", detail: "1を先に解決してください" },
-      { name: "3. 初期設定データ (シード)", status: "skip", detail: "—" },
+      { name: "3. 市場マスタ (SG/TW)", status: "skip", detail: "—" },
       { name: "4. Storageバケット (product-images)", status: "skip", detail: "—" },
-      { name: "5. Shopify Admin API", status: "skip", detail: "—" },
-      { name: "6. 画像ワーカー", status: "skip", detail: "—" }
+      { name: "5. 画像ワーカー", status: "skip", detail: "—" }
     );
     return checks;
   }
 
   const sb = supabaseAdmin();
 
-  // 2. テーブル存在 (= setup.sql 実行済みか)
-  const { error: tableErr } = await sb.from("products").select("id").limit(1);
+  // 2. テーブル存在 (= setup.sql 0003まで実行済みか)
+  const { error: tableErr } = await sb.from("market_listings").select("id").limit(1);
   checks.push({
     name: "2. データベース (マイグレーション)",
     status: tableErr ? "ng" : "ok",
-    detail: tableErr ? `productsテーブルにアクセスできません: ${tableErr.message}` : "テーブル作成済み",
-    fix: "SupabaseのSQL Editorで supabase/setup.sql の中身を貼り付けて Run",
+    detail: tableErr
+      ? `market_listingsテーブルにアクセスできません: ${tableErr.message}`
+      : "テーブル作成済み (Amazon→Shopee版スキーマ)",
+    fix: "SupabaseのSQL Editorで supabase/setup.sql の中身を貼り付けて Run (旧版から更新する場合は 0003_pivot_amazon_shopee.sql のみでも可)",
   });
 
-  // 3. シード投入済みか
+  // 3. 市場マスタ
   if (!tableErr) {
-    const { count } = await sb.from("app_settings").select("*", { count: "exact", head: true });
-    const seeded = (count ?? 0) > 0;
+    const { data: markets } = await sb.from("markets").select("code, enabled");
+    const enabled = (markets ?? []).filter((m) => m.enabled);
     checks.push({
-      name: "3. 初期設定データ (シード)",
-      status: seeded ? "ok" : "ng",
-      detail: seeded ? `app_settings ${count}件` : "app_settingsが空です",
-      fix: "setup.sql を実行すればシードも入ります (再実行しても安全)",
+      name: "3. 市場マスタ (SG/TW)",
+      status: enabled.length > 0 ? "ok" : "ng",
+      detail:
+        enabled.length > 0
+          ? `有効な市場: ${enabled.map((m) => m.code).join(", ")}`
+          : "有効な市場がありません",
+      fix: "setup.sql でSG/TWがシードされます。設定画面で有効化・為替や手数料の調整もできます",
     });
   } else {
-    checks.push({ name: "3. 初期設定データ (シード)", status: "skip", detail: "2を先に解決してください" });
+    checks.push({ name: "3. 市場マスタ (SG/TW)", status: "skip", detail: "2を先に解決してください" });
   }
 
   // 4. Storage バケット
@@ -82,35 +85,7 @@ async function runChecks(): Promise<Check[]> {
     });
   }
 
-  // 5. Shopify
-  const hasShopifyEnv =
-    !!process.env.SHOPIFY_STORE_DOMAIN && !!process.env.SHOPIFY_ADMIN_ACCESS_TOKEN;
-  if (!hasShopifyEnv) {
-    checks.push({
-      name: "5. Shopify Admin API",
-      status: "ng",
-      detail: "SHOPIFY_STORE_DOMAIN / SHOPIFY_ADMIN_ACCESS_TOKEN が未設定",
-      fix: "Shopify管理画面→設定→アプリと販売チャネル→アプリ開発→アプリを作成→Admin APIスコープでwrite_productsを許可→インストールしてトークンを.env.localへ (CSV出力だけなら未設定でも使えます)",
-    });
-  } else {
-    try {
-      const r = await testConnection();
-      checks.push({
-        name: "5. Shopify Admin API",
-        status: "ok",
-        detail: `接続OK: ${r.shopName} (${r.domain})`,
-      });
-    } catch (e) {
-      checks.push({
-        name: "5. Shopify Admin API",
-        status: "ng",
-        detail: e instanceof Error ? e.message : String(e),
-        fix: "トークン・ドメイン・APIスコープ(write_products)を確認",
-      });
-    }
-  }
-
-  // 6. 画像ワーカー (直近のジョブ処理実績で判定)
+  // 5. 画像ワーカー (直近のジョブ処理実績で判定)
   if (!tableErr) {
     const { data: lastJob } = await sb
       .from("image_jobs")
@@ -120,15 +95,15 @@ async function runChecks(): Promise<Check[]> {
       .limit(1)
       .maybeSingle();
     checks.push({
-      name: "6. 画像ワーカー (Railway)",
+      name: "5. 画像ワーカー (Railway) ※任意",
       status: lastJob ? "ok" : "ng",
       detail: lastJob
         ? `直近のジョブ処理: ${new Date(lastJob.updated_at).toLocaleString("ja-JP")} (${lastJob.status})`
         : "ジョブ処理の実績がまだありません (未デプロイ、または一度も画像処理を実行していない)",
-      fix: "RailwayでこのリポジトリをデプロイしRoot Directoryをapps/image-workerに設定、環境変数を投入。その後、商品一覧から「選択行の画像を処理」を実行すると自動判定されます",
+      fix: "画像の白背景化を使う場合のみ必要です。RailwayでこのリポジトリをデプロイしRoot Directoryをapps/image-workerに設定。使わない場合はAmazonの画像URLがそのまま出力されます",
     });
   } else {
-    checks.push({ name: "6. 画像ワーカー", status: "skip", detail: "2を先に解決してください" });
+    checks.push({ name: "5. 画像ワーカー", status: "skip", detail: "2を先に解決してください" });
   }
 
   return checks;
@@ -160,7 +135,8 @@ export default async function SetupPage() {
       <h2 className="text-lg font-bold">セットアップ状況</h2>
       {allOk ? (
         <div className="rounded border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900">
-          ✅ すべて完了しています。<Link href="/import" className="underline">取込・検証</Link>からxlsxをアップロードして始められます。
+          ✅ すべて完了しています。<Link href="/import" className="underline">取込・検証</Link>から
+          ASIN Pickのエクスポートファイルをアップロードして始められます。
         </div>
       ) : (
         <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
@@ -188,7 +164,7 @@ export default async function SetupPage() {
       </div>
 
       <p className="text-xs text-gray-500">
-        ※ Shopify未設定でも、取込・画像処理・粗利計算・CSV出力までは使えます (API出品のみ不可)。
+        ※画像ワーカーは任意です。5がNGでも取込→粗利計算→一括アップ用xlsx出力までは使えます。
       </p>
     </div>
   );

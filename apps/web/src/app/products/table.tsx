@@ -3,33 +3,43 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { Product } from "@/lib/types";
+import type { Market, MarketListing, Product } from "@/lib/types";
 
 export type ProductRow = Product & {
+  listings: Record<string, MarketListing>;
   image_total: number;
   image_success: number;
   image_failed: number;
   image_processing: number;
 };
 
-type SortKey = "sku" | "title" | "purchase_price_jpy" | "recommended_price" | "gross_margin_rate" | "inventory_qty";
-type FilterKey = "all" | "margin_alert" | "flagged" | "image_failed" | "recheck";
+type FilterKey = "all" | "margin_alert" | "flagged" | "image_failed" | "oos" | "update_required";
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "all", label: "すべて" },
   { key: "margin_alert", label: "赤字のみ" },
   { key: "flagged", label: "コンプラフラグ" },
   { key: "image_failed", label: "画像失敗" },
-  { key: "recheck", label: "在庫要再確認" },
+  { key: "oos", label: "Amazon在庫切れ" },
+  { key: "update_required", label: "要更新/エラー" },
 ];
 
-export function ProductsTable({ rows, currency }: { rows: ProductRow[]; currency: string }) {
+const LISTING_STATUS: Record<MarketListing["status"], { label: string; cls: string }> = {
+  draft: { label: "未出品", cls: "bg-gray-100 text-gray-600" },
+  ready: { label: "準備OK", cls: "bg-blue-100 text-blue-700" },
+  exported_xlsx: { label: "xlsx出力済", cls: "bg-emerald-50 text-emerald-700" },
+  listed: { label: "出品中", cls: "bg-emerald-100 text-emerald-700" },
+  update_required: { label: "要更新", cls: "bg-amber-100 text-amber-800" },
+  delisted: { label: "取下げ", cls: "bg-gray-200 text-gray-600" },
+  error: { label: "エラー", cls: "bg-red-100 text-red-700" },
+};
+
+export function ProductsTable({ rows, markets }: { rows: ProductRow[]; markets: Market[] }) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
-  const [sortKey, setSortKey] = useState<SortKey>("sku");
-  const [sortAsc, setSortAsc] = useState(true);
+  const [marketCode, setMarketCode] = useState(markets[0]?.code ?? "SG");
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -41,13 +51,12 @@ export function ProductsTable({ rows, currency }: { rows: ProductRow[]; currency
         (r) =>
           r.sku.toLowerCase().includes(q) ||
           r.title.toLowerCase().includes(q) ||
-          (r.ip_name ?? "").toLowerCase().includes(q) ||
-          (r.character_name ?? "").toLowerCase().includes(q)
+          (r.ip_name ?? "").toLowerCase().includes(q)
       );
     }
     switch (filter) {
       case "margin_alert":
-        list = list.filter((r) => r.margin_alert);
+        list = list.filter((r) => Object.values(r.listings).some((l) => l.margin_alert));
         break;
       case "flagged":
         list = list.filter(
@@ -57,51 +66,65 @@ export function ProductsTable({ rows, currency }: { rows: ProductRow[]; currency
       case "image_failed":
         list = list.filter((r) => r.image_failed > 0);
         break;
-      case "recheck":
-        list = list.filter((r) => r.restock_recheck_flag);
+      case "oos":
+        list = list.filter((r) => r.source_stock_status === "out_of_stock");
+        break;
+      case "update_required":
+        list = list.filter((r) =>
+          Object.values(r.listings).some((l) => l.status === "update_required" || l.status === "error")
+        );
         break;
     }
-    return [...list].sort((a, b) => {
-      const av = a[sortKey];
-      const bv = b[sortKey];
-      if (av === null || av === undefined) return 1;
-      if (bv === null || bv === undefined) return -1;
-      const cmp = typeof av === "number" && typeof bv === "number"
-        ? av - bv
-        : String(av).localeCompare(String(bv));
-      return sortAsc ? cmp : -cmp;
-    });
-  }, [rows, search, filter, sortKey, sortAsc]);
-
-  const toggleSort = (key: SortKey) => {
-    if (sortKey === key) setSortAsc(!sortAsc);
-    else { setSortKey(key); setSortAsc(true); }
-  };
+    return list;
+  }, [rows, search, filter]);
 
   const toggleAll = () => {
     if (selected.size === filtered.length) setSelected(new Set());
     else setSelected(new Set(filtered.map((r) => r.id)));
   };
-
   const toggle = (id: string) => {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id); else next.add(id);
     setSelected(next);
   };
 
-  const withSelection = async (
-    label: string,
-    fn: (ids: string[]) => Promise<string>
-  ) => {
-    if (selected.size === 0) {
-      setMessage("行を選択してください");
-      return;
-    }
+  // 対象市場の粗利率で降順ソートした表示 (利益率がよいものから選ぶ)
+  const sorted = useMemo(() => {
+    return [...filtered].sort((a, b) => {
+      const ma = a.listings[marketCode]?.gross_margin_rate ?? -Infinity;
+      const mb = b.listings[marketCode]?.gross_margin_rate ?? -Infinity;
+      return mb - ma;
+    });
+  }, [filtered, marketCode]);
+
+  const selectProfitable = () => {
+    const ids = sorted
+      .filter((r) => {
+        const l = r.listings[marketCode];
+        if (!l || l.gross_margin_rate === null || l.margin_alert) return false;
+        const target = markets.find((m) => m.code === marketCode)?.target_margin_rate ?? 0;
+        return l.gross_margin_rate >= target;
+      })
+      .filter(
+        (r) =>
+          !r.compliance_bootleg_suspect &&
+          !r.compliance_restricted_item &&
+          r.source_stock_status !== "out_of_stock"
+      )
+      .map((r) => r.id);
+    setSelected(new Set(ids));
+    setMessage(
+      ids.length > 0
+        ? `目標粗利率を満たす${ids.length}件を選択しました (真贋要確認・禁制品・Amazon在庫切れは除外)`
+        : "目標粗利率を満たす商品がありません (取込後に「全件再計算」を実行したか確認)"
+    );
+  };
+
+  const run = async (label: string, fn: () => Promise<string>) => {
     setBusy(label);
     setMessage(null);
     try {
-      const result = await fn([...selected]);
-      setMessage(result);
+      setMessage(await fn());
       router.refresh();
     } catch (e) {
       setMessage(`エラー: ${e instanceof Error ? e.message : String(e)}`);
@@ -110,24 +133,35 @@ export function ProductsTable({ rows, currency }: { rows: ProductRow[]; currency
     }
   };
 
-  const enqueueImages = () =>
-    withSelection("enqueue", async (ids) => {
+  const needSelection = () => {
+    if (selected.size === 0) {
+      setMessage("行を選択してください");
+      return true;
+    }
+    return false;
+  };
+
+  const enqueueImages = () => {
+    if (needSelection()) return;
+    run("enqueue", async () => {
       const res = await fetch("/api/image-jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productIds: ids }),
+        body: JSON.stringify({ productIds: [...selected] }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error);
       return `画像処理ジョブを${json.enqueued}件投入しました`;
     });
+  };
 
-  const exportCsv = () =>
-    withSelection("csv", async (ids) => {
-      const res = await fetch("/api/export/csv", {
+  const exportXlsx = () => {
+    if (needSelection()) return;
+    run("xlsx", async () => {
+      const res = await fetch("/api/export/shopee-xlsx", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productIds: ids }),
+        body: JSON.stringify({ productIds: [...selected], marketCode }),
       });
       if (!res.ok) {
         const json = await res.json();
@@ -137,55 +171,30 @@ export function ProductsTable({ rows, currency }: { rows: ProductRow[]; currency
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `shopify-products-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.download = `shopee-${marketCode}-paste-rows.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
-      return `CSVを${ids.length}商品分ダウンロードしました`;
+      return `${marketCode}向けの貼り付け用xlsxをダウンロードしました (公式テンプレの7行目以降にコピペしてアップロード)`;
     });
+  };
 
-  const exportApi = () =>
-    withSelection("api", async (ids) => {
-      const res = await fetch("/api/export/shopify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productIds: ids }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error);
-      const failures = (json.results ?? []).filter((r: { ok: boolean }) => !r.ok);
-      let msg = `Shopifyにdraft作成: 成功${json.created}件 / 失敗${json.failed}件`;
-      if (failures.length > 0) {
-        msg += ` — ${failures.map((f: { sku: string; error: string }) => `${f.sku}: ${f.error}`).join(" | ")}`;
-      }
-      return msg;
-    });
-
-  const recalculate = async () => {
-    setBusy("recalc");
-    setMessage(null);
-    try {
+  const recalculate = () =>
+    run("recalc", async () => {
       const res = await fetch("/api/recalculate", { method: "POST" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error);
-      setMessage(`${json.updated}/${json.total}件を再計算しました`);
-      router.refresh();
-    } catch (e) {
-      setMessage(`エラー: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setBusy(null);
-    }
-  };
+      return `${json.updated}/${json.total}件を再計算しました`;
+    });
 
-  const fmtMoney = (v: number | null, unit: string) =>
-    v === null ? "—" : `${unit}${v.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
-  const fmtRate = (v: number | null) => (v === null ? "—" : `${(v * 100).toFixed(1)}%`);
+  const fmt = (v: number | null | undefined) =>
+    v === null || v === undefined ? "—" : v.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <input
           type="text"
-          placeholder="SKU / 商品名 / 作品 / キャラで検索"
+          placeholder="ASIN / 商品名 / 作品で検索"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="w-64 rounded border border-gray-300 px-3 py-1.5 text-sm bg-white"
@@ -208,7 +217,28 @@ export function ProductsTable({ rows, currency }: { rows: ProductRow[]; currency
         </span>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="text-sm text-gray-600">
+          対象市場:
+          <select
+            value={marketCode}
+            onChange={(e) => setMarketCode(e.target.value)}
+            className="ml-1 rounded border border-gray-300 bg-white px-2 py-1.5 text-sm"
+          >
+            {markets.map((m) => (
+              <option key={m.code} value={m.code}>
+                {m.code} ({m.currency})
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          onClick={selectProfitable}
+          disabled={busy !== null}
+          className="rounded bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-700 disabled:opacity-50"
+        >
+          利益率が目標以上を全選択
+        </button>
         <button
           onClick={enqueueImages}
           disabled={busy !== null}
@@ -217,18 +247,11 @@ export function ProductsTable({ rows, currency }: { rows: ProductRow[]; currency
           {busy === "enqueue" ? "投入中..." : "選択行の画像を処理"}
         </button>
         <button
-          onClick={exportCsv}
+          onClick={exportXlsx}
           disabled={busy !== null}
           className="rounded bg-emerald-600 px-3 py-1.5 text-sm text-white hover:bg-emerald-700 disabled:opacity-50"
         >
-          {busy === "csv" ? "生成中..." : "CSVエクスポート (6a)"}
-        </button>
-        <button
-          onClick={exportApi}
-          disabled={busy !== null}
-          className="rounded bg-purple-600 px-3 py-1.5 text-sm text-white hover:bg-purple-700 disabled:opacity-50"
-        >
-          {busy === "api" ? "作成中..." : "Shopifyへdraft作成 (6b)"}
+          {busy === "xlsx" ? "生成中..." : "一括アップ用xlsx"}
         </button>
         <button
           onClick={recalculate}
@@ -256,73 +279,92 @@ export function ProductsTable({ rows, currency }: { rows: ProductRow[]; currency
                   onChange={toggleAll}
                 />
               </th>
-              {(
-                [
-                  ["sku", "SKU"],
-                  ["title", "商品名"],
-                  ["purchase_price_jpy", "仕入(JPY)"],
-                  ["recommended_price", `推奨売値(${currency})`],
-                  ["gross_margin_rate", "粗利率"],
-                  ["inventory_qty", "在庫"],
-                ] as [SortKey, string][]
-              ).map(([key, label]) => (
-                <th
-                  key={key}
-                  className="p-2 cursor-pointer select-none hover:text-gray-900"
-                  onClick={() => toggleSort(key)}
-                >
-                  {label}
-                  {sortKey === key ? (sortAsc ? " ▲" : " ▼") : ""}
+              <th className="p-2">ASIN</th>
+              <th className="p-2">商品名</th>
+              <th className="p-2">Amazon価格</th>
+              <th className="p-2">Amazon在庫</th>
+              {markets.map((m) => (
+                <th key={m.code} className="p-2">
+                  {m.code} 推奨売値 / 粗利率 / 状態
                 </th>
               ))}
               <th className="p-2">画像</th>
               <th className="p-2">フラグ</th>
-              <th className="p-2">要再確認</th>
-              <th className="p-2">出力</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((r) => {
+            {sorted.map((r) => {
               const flagged =
                 r.compliance_ip_caution || r.compliance_bootleg_suspect || r.compliance_restricted_item;
+              const anyAlert = Object.values(r.listings).some((l) => l.margin_alert);
               return (
                 <tr
                   key={r.id}
                   className={`border-t border-gray-100 ${
-                    r.margin_alert ? "bg-red-50" : flagged ? "bg-amber-50" : ""
+                    anyAlert ? "bg-red-50" : flagged ? "bg-amber-50" : ""
                   }`}
                 >
                   <td className="p-2">
                     <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} />
                   </td>
-                  <td className="p-2 font-mono text-xs">{r.sku}</td>
+                  <td className="p-2 font-mono text-xs">
+                    {r.amazon_url ? (
+                      <a href={r.amazon_url} target="_blank" className="text-blue-700 hover:underline">
+                        {r.sku}
+                      </a>
+                    ) : (
+                      r.sku
+                    )}
+                  </td>
                   <td className="p-2 max-w-64">
                     <Link href={`/products/${r.id}`} className="text-blue-700 hover:underline line-clamp-2">
                       {r.title}
                     </Link>
                   </td>
-                  <td className="p-2 tabular-nums">{fmtMoney(r.purchase_price_jpy, "¥")}</td>
-                  <td className="p-2 tabular-nums">{fmtMoney(r.recommended_price, "")}</td>
-                  <td className={`p-2 tabular-nums ${r.margin_alert ? "font-bold text-red-600" : ""}`}>
-                    {fmtRate(r.gross_margin_rate)}
-                    {r.margin_alert && " ⚠"}
+                  <td className="p-2 tabular-nums">
+                    {r.purchase_price_jpy !== null ? `¥${r.purchase_price_jpy.toLocaleString()}` : "—"}
                   </td>
-                  <td className="p-2 tabular-nums">{r.inventory_qty}</td>
+                  <td className="p-2 text-xs">
+                    {r.source_stock_status === "in_stock" && <span className="text-emerald-700">あり</span>}
+                    {r.source_stock_status === "out_of_stock" && (
+                      <span className="rounded bg-red-100 px-1 py-0.5 text-red-700 font-medium">切れ</span>
+                    )}
+                    {r.source_stock_status === "unknown" && <span className="text-gray-400">不明</span>}
+                  </td>
+                  {markets.map((m) => {
+                    const l = r.listings[m.code];
+                    if (!l) {
+                      return (
+                        <td key={m.code} className="p-2 text-xs text-gray-400">
+                          —
+                        </td>
+                      );
+                    }
+                    const st = LISTING_STATUS[l.status];
+                    return (
+                      <td key={m.code} className="p-2 text-xs whitespace-nowrap">
+                        <span className="tabular-nums">{fmt(l.recommended_price)}</span>
+                        <span
+                          className={`ml-1 tabular-nums ${l.margin_alert ? "font-bold text-red-600" : "text-gray-500"}`}
+                        >
+                          {l.gross_margin_rate !== null ? `${(l.gross_margin_rate * 100).toFixed(0)}%` : ""}
+                          {l.margin_alert && "⚠"}
+                        </span>
+                        <span className={`ml-1 rounded px-1 py-0.5 ${st.cls}`}>{st.label}</span>
+                      </td>
+                    );
+                  })}
                   <td className="p-2 text-xs">
                     {r.image_total === 0 ? (
                       <span className="text-gray-400">なし</span>
                     ) : (
                       <span>
-                        <span className="text-emerald-700">{r.image_success}</span>
-                        {"/"}
-                        {r.image_total}
+                        <span className="text-emerald-700">{r.image_success}</span>/{r.image_total}
                         {r.image_processing > 0 && (
                           <span className="ml-1 text-blue-600">処理中{r.image_processing}</span>
                         )}
                         {r.image_failed > 0 && (
-                          <span className="ml-1 rounded bg-red-100 px-1 text-red-700">
-                            失敗{r.image_failed}
-                          </span>
+                          <span className="ml-1 rounded bg-red-100 px-1 text-red-700">失敗{r.image_failed}</span>
                         )}
                       </span>
                     )}
@@ -341,19 +383,13 @@ export function ProductsTable({ rows, currency }: { rows: ProductRow[]; currency
                       <span className="rounded bg-gray-100 px-1 py-0.5 text-gray-600">重量補完</span>
                     )}
                   </td>
-                  <td className="p-2 text-center">{r.restock_recheck_flag ? "✔" : ""}</td>
-                  <td className="p-2 text-xs">
-                    {r.export_status === "api_created" && <span className="text-purple-700">API済</span>}
-                    {r.export_status === "csv_exported" && <span className="text-emerald-700">CSV済</span>}
-                    {r.export_status === "api_failed" && <span className="text-red-600">API失敗</span>}
-                  </td>
                 </tr>
               );
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={11} className="p-8 text-center text-gray-400">
-                  商品がありません。「取込・検証」からxlsxを取り込んでください
+                <td colSpan={8 + markets.length} className="p-8 text-center text-gray-400">
+                  商品がありません。「取込・検証」からAmazon仕入れリストxlsxを取り込んでください
                 </td>
               </tr>
             )}
@@ -362,7 +398,8 @@ export function ProductsTable({ rows, currency }: { rows: ProductRow[]; currency
       </div>
 
       <p className="text-xs text-gray-500">
-        ※真贋要確認フラグ付き商品の出品は Shopify AUP 違反・決済停止リスクがあります。出品前に必ず現物確認してください。
+        ※一覧は選択中の市場の粗利率が高い順に並びます。Amazon在庫切れの商品はShopee表示在庫0で計算されます。
+        真贋要確認フラグ付き商品の出品はアカウント停止リスクがあります。
       </p>
     </div>
   );

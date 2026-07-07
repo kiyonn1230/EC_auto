@@ -1,57 +1,42 @@
-# 越境EC自動化ダッシュボード (Phase 1)
+# Amazon→Shopee 無在庫物販ダッシュボード
 
-メルカリで仕入れたアニメグッズを Shopify で予約販売するための社内オペ用ダッシュボード。
+Amazonで仕入れてShopee(SG/TW等)で販売する無在庫物販の社内オペツール。
 
-- 商品データ xlsx + 仕入原価 xlsx を取り込み → SKU 突合 → products に upsert
-- 画像を DL → 背景除去 (rembg) → 1:1 白背景整形 → Supabase Storage へ保存
-- 粗利再計算 / 重量・寸法補正 / コンプラ・真贋チェック
-- Shopify 商品 CSV 出力 or Admin API (GraphQL) で draft 出品作成
+フロー:
+1. Chrome拡張 **ASIN Pick** でAmazonから商品リストをエクスポート
+2. そのファイル(xlsx/csv)をダッシュボードに取込 → 市場別の推奨売値・粗利率を自動計算
+3. **利益率がよい商品をワンクリック選別** (真贋・禁制品・在庫切れは自動除外)
+4. **Shopee一括アップロード形式のxlsx**を出力 → Seller Centreへアップロード
+
+- 画像の白背景化 (rembg) は任意機能。使わなければAmazonの画像URLがそのまま出力される
+- Amazonへの直接スクレイピングは行わない (入力はASIN Pick等がエクスポートしたファイルのみ)
 
 ## 構成
 
 ```
-apps/web/          Next.js (App Router) ダッシュボード。ジョブ投入と結果参照のみ
-apps/image-worker/ Python 常駐ワーカー (rembg + Pillow)。Railway 等でDocker稼働
-supabase/          DDL マイグレーション (ジョブキュー image_jobs 含む)
-docs/              アーキテクチャ文書
+apps/web/          Next.js (App Router) ダッシュボード
+apps/image-worker/ Python 常駐ワーカー (rembg + Pillow, 任意)
+supabase/          DDL マイグレーション + setup.sql (コピペ1発)
+docs/              セットアップ手順・アーキテクチャ
 ```
-
-詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照。
 
 ## セットアップ
 
 **👉 初めての人は [docs/SETUP.md](docs/SETUP.md) のクリック単位の手順に従ってください。**
 起動後はダッシュボードの「セットアップ」ページが不足項目を自動チェックします。
 
-### 1. Supabase
-
-新規プロジェクトを作成し、`supabase/setup.sql` を SQL Editor に貼り付けて実行
-(1ファイルでテーブル+シード+Storageバケットまで作成される)。
-
-### 2. ダッシュボード (apps/web)
-
 ```bash
 cd apps/web
-cp .env.example .env.local   # Supabase / Shopify の接続情報を記入
+cp .env.example .env.local   # SupabaseのURL/service_roleキーを記入
 npm install
 npm run dev
 ```
 
-### 3. 画像ワーカー (apps/image-worker)
+## 運用上の注意 (無在庫モデルのリスク)
 
-```bash
-cd apps/image-worker
-cp .env.example .env
-pip install -r requirements.txt
-python worker.py
-```
-
-Railway へは Dockerfile ごとデプロイ。環境変数は `.env.example` と同じものを設定。
-
-## 制約(厳守事項)
-
-- メルカリの商品ページ/内部APIへのアクセスは一切実装しない。画像は入力 xlsx に
-  含まれる URL のみ使用し、商品IDからの画像URL推測もしない。
-- 背景除去は rembg 等の専用手法のみ。生成AIは任意のライフスタイル背景モジュール
-  (既定OFF)に限定。
-- APIキー/トークンは .env 管理。コミット禁止。
+- **在庫・価格の監視が生命線**: Amazonで値上がり/在庫切れした商品を放置すると
+  Shopeeの注文キャンセル率が上がりアカウント停止に直結します。定期的にASIN Pickで
+  再エクスポート→再取込すると価格・在庫が更新され、要更新の出品がハイライトされます
+- **Amazonの商品画像**は出品者・メーカーに権利があります。流用は権利者申告で
+  削除・ペナルティの対象になり得ます
+- 真贋要確認・禁制品フラグ付き商品の出品はアカウント停止リスクがあります

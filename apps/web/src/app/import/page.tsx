@@ -62,7 +62,7 @@ export default async function ImportPage() {
                   {batches.map((b) => (
                     <tr key={b.id} className="border-t border-gray-100">
                       <td className="p-2 text-xs">{new Date(b.created_at).toLocaleString("ja-JP")}</td>
-                      <td className="p-2">{b.file_type === "product_data" ? "(A) 商品" : "(B) 原価"}</td>
+                      <td className="p-2">{b.file_type === "product_data" ? "仕入れリスト" : b.file_type}</td>
                       <td className="p-2 text-xs">{b.file_name}</td>
                       <td className="p-2 tabular-nums">{b.row_count}</td>
                       <td className="p-2 tabular-nums text-emerald-700">{b.ok_count}</td>
@@ -85,7 +85,7 @@ export default async function ImportPage() {
           </section>
 
           <section>
-            <h3 className="text-sm font-bold mb-2">検証結果 (突合失敗・必須欠損・Shopify制約違反)</h3>
+            <h3 className="text-sm font-bold mb-2">検証結果 (必須欠損・Shopee制約違反・データ不備)</h3>
             <div className="overflow-x-auto rounded border border-gray-200 bg-white">
               <table className="w-full text-sm">
                 <thead className="bg-gray-100 text-left text-xs text-gray-600">

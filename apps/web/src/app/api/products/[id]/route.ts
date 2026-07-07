@@ -1,26 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { loadEnrichContext } from "@/lib/settings";
-import { enrichProduct } from "@/lib/enrich";
-import type { Product } from "@/lib/types";
+import { computeListingPatch, enrichProduct } from "@/lib/enrich";
+import type { MarketListing, Product } from "@/lib/types";
 
 export const runtime = "nodejs";
 
 const EDITABLE_FIELDS = [
-  "inventory_qty",
-  "purchase_status",
-  "restock_recheck_flag",
-  "current_listed_price",
   "purchase_price_jpy",
+  "source_stock_status",
   "weight_g",
   "length_cm",
   "width_cm",
   "height_cm",
   "category",
+  "shopee_category_id",
+  "note",
   "status",
 ] as const;
 
-/** PATCH /api/products/[id] — UIからの手動更新。数値・重量系を触ったら再計算 */
+/** PATCH /api/products/[id] — 手動更新。価格・重量系を触ったら市場別出品も再計算 */
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -41,6 +40,7 @@ export async function PATCH(
     // 手動で重量・寸法を入れた場合は実測扱い
     if ("weight_g" in patch && patch.weight_g !== null) patch.weight_source = "measured";
     if ("length_cm" in patch && patch.length_cm !== null) patch.dimension_source = "measured";
+    if ("source_stock_status" in patch) patch.source_checked_at = new Date().toISOString();
 
     const { data: updated, error } = await sb
       .from("products")
@@ -50,10 +50,9 @@ export async function PATCH(
       .single();
     if (error || !updated) throw new Error(error?.message ?? "商品が見つかりません");
 
-    // 価格・重量関連を触った場合は粗利等を再計算
     const needsRecalc = [
-      "current_listed_price", "purchase_price_jpy",
-      "weight_g", "length_cm", "width_cm", "height_cm", "category",
+      "purchase_price_jpy", "weight_g", "length_cm", "width_cm", "height_cm",
+      "category", "source_stock_status",
     ].some((f) => f in patch);
 
     let finalProduct = updated as Product;
@@ -67,6 +66,31 @@ export async function PATCH(
         .select("*")
         .single();
       if (after) finalProduct = after as Product;
+
+      const { data: listingRows } = await sb
+        .from("market_listings")
+        .select("*")
+        .eq("product_id", id);
+      for (const market of ctx.markets.filter((m) => m.enabled)) {
+        const existing =
+          ((listingRows ?? []) as MarketListing[]).find((l) => l.market_code === market.code) ?? null;
+        const listingPatch = computeListingPatch(finalProduct, market, existing, ctx);
+        const stock =
+          finalProduct.source_stock_status === "out_of_stock"
+            ? 0
+            : existing?.stock ?? market.default_stock;
+        await sb.from("market_listings").upsert(
+          {
+            product_id: id,
+            market_code: market.code,
+            stock,
+            status:
+              existing?.status === "listed" ? "update_required" : existing?.status ?? "draft",
+            ...listingPatch,
+          },
+          { onConflict: "product_id,market_code" }
+        );
+      }
     }
 
     return NextResponse.json({ product: finalProduct });

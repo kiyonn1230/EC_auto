@@ -1,4 +1,5 @@
-// DB行の型 (supabase/migrations/0001_init.sql に対応)
+// DB行の型 (supabase/migrations 0001〜0003 に対応)
+// モデル: Amazon仕入れ → Shopee(多市場)無在庫販売
 
 export type WeightSource = "measured" | "category_default" | "dummy_detected" | "missing";
 
@@ -15,22 +16,22 @@ export type ImageStatus =
 
 export interface Product {
   id: string;
-  sku: string;
+  sku: string;                       // = ASIN
+  asin: string | null;
+  amazon_url: string | null;
   title: string;
   description_raw: string | null;
   description_html: string | null;
   category: string | null;
+  shopee_category_id: number | null; // Shopee API出品に必要
   ip_name: string | null;
   character_name: string | null;
   tags: string[];
+  note: string | null;
 
-  purchase_price_jpy: number | null;
-  current_listed_price: number | null;
-  recommended_price: number | null;
-  gross_margin_amount: number | null;
-  gross_margin_rate: number | null;
-  margin_alert: boolean;
-  pricing_breakdown: PricingBreakdown | null;
+  purchase_price_jpy: number | null; // Amazon価格 (仕入原価)
+  source_stock_status: "in_stock" | "out_of_stock" | "unknown"; // Amazon側の在庫
+  source_checked_at: string | null;
 
   weight_g: number | null;
   weight_source: WeightSource | null;
@@ -39,22 +40,57 @@ export interface Product {
   height_cm: number | null;
   dimension_source: WeightSource | null;
 
-  inventory_qty: number;
-  purchase_status: "unpurchased" | "ordered" | "in_stock";
-  restock_recheck_flag: boolean;
-
   compliance_ip_caution: boolean;
   compliance_bootleg_suspect: boolean;
   compliance_restricted_item: boolean;
   compliance_notes: ComplianceNote[];
 
-  shopify_handle: string | null;
-  shopify_product_id: string | null;
-  export_status: "not_exported" | "csv_exported" | "api_created" | "api_failed";
   status: "draft" | "ready" | "archived";
-
   created_at: string;
   updated_at: string;
+}
+
+export interface Market {
+  code: string;                      // 'SG' | 'TW' | ...
+  name: string;
+  currency: string;
+  fx_rate_jpy: number;               // 1通貨あたりのJPY
+  fee_rate: number;                  // Shopee手数料合計 (販売+決済+サービス)
+  target_margin_rate: number;
+  shipping_carrier: string;          // shipping_rate_table.carrier
+  domestic_cost_jpy: number;         // 国内固定費 (Amazon送料・梱包等)
+  default_stock: number;
+  days_to_ship: number;
+  logistics_channel_id: number | null;
+  enabled: boolean;
+}
+
+export interface MarketListing {
+  id: string;
+  product_id: string;
+  market_code: string;
+  recommended_price: number | null;  // 市場通貨
+  listed_price: number | null;
+  stock: number;
+  gross_margin_rate: number | null;
+  margin_alert: boolean;
+  pricing_breakdown: PricingBreakdown | null;
+  shopee_item_id: number | null;
+  status: "draft" | "ready" | "exported_xlsx" | "listed" | "update_required" | "delisted" | "error";
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ShopeeShop {
+  id: string;
+  market_code: string;
+  shop_id: number;
+  shop_name: string | null;
+  access_token: string | null;
+  refresh_token: string | null;
+  token_expires_at: string | null;
+  authorized_at: string;
 }
 
 export interface ProductImage {
@@ -128,18 +164,18 @@ export interface ComplianceNote {
 }
 
 export interface PricingBreakdown {
-  purchase_price_jpy: number;
-  domestic_shipping_jpy: number;
+  purchase_price_jpy: number;        // Amazon価格
+  domestic_cost_jpy: number;
   intl_shipping_jpy: number;
   chargeable_weight_g: number;
   volumetric_weight_g: number | null;
   total_cost_jpy: number;
-  total_cost_store: number;
-  fx_rate_jpy_per_store: number;
-  payment_fee_rate: number;
+  total_cost_market: number;         // 市場通貨換算
+  fx_rate_jpy: number;
+  fee_rate: number;
   target_margin_rate: number;
   carrier: string;
-  store_currency: string;
+  currency: string;
   warnings: string[];
 }
 
@@ -155,25 +191,10 @@ export interface ImageSettings {
   lifestyle_enabled: boolean;
 }
 
-export interface ShopifySettings {
-  vendor: string;
-  default_product_type: string;
-  default_status: "draft" | "active";
-  inventory_policy: "continue" | "deny";
-  weight_unit: "g";
-  output_mode: "csv" | "api";
-}
-
 export interface AppSettings {
-  store_currency: string;
-  fx_rate_jpy_per_store: number;
-  payment_fee_rate: number;
-  target_margin_rate: number;
-  domestic_shipping_jpy: number;
-  default_carrier: string;
   volumetric_divisor: number;
   dummy_weight_values: number[];
-  preorder_note_html: string;
+  amazon_domestic_shipping_jpy: number;
+  shipping_note_text: string;
   image_settings: ImageSettings;
-  shopify_settings: ShopifySettings;
 }

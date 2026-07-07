@@ -1,8 +1,8 @@
-import type { AppSettings, PricingBreakdown, ShippingRate } from "@/lib/types";
+import type { AppSettings, Market, PricingBreakdown, ShippingRate } from "@/lib/types";
 
 export interface PricingInput {
-  purchasePriceJpy: number | null;
-  currentListedPrice: number | null; // ストア通貨
+  purchasePriceJpy: number | null;   // Amazon価格
+  listedPrice: number | null;        // 実際の出品価格 (市場通貨, 粗利率評価用)
   weightG: number | null;
   lengthCm: number | null;
   widthCm: number | null;
@@ -10,9 +10,8 @@ export interface PricingInput {
 }
 
 export interface PricingResult {
-  recommendedPrice: number | null;
-  grossMarginAmount: number | null; // 現状売値ベース (ストア通貨)
-  grossMarginRate: number | null;
+  recommendedPrice: number | null;   // 市場通貨
+  grossMarginRate: number | null;    // listedPrice(なければ推奨売値)ベース
   marginAlert: boolean;
   breakdown: PricingBreakdown;
 }
@@ -53,84 +52,78 @@ function lookupIntlShipping(
 }
 
 /**
- * 推奨売値の逆算:
- *   総原価Store = (仕入 + 国内送料 + 国際送料) / fx
- *   推奨売値 = 総原価Store / (1 - 決済手数料率 - 目標粗利率)
- * 現状売値の粗利率 = (売値×(1-手数料) - 総原価Store) / 売値
+ * 市場別の推奨売値逆算:
+ *   総原価(市場通貨) = (Amazon価格 + 国内固定費 + 国際送料) / fx
+ *   推奨売値 = 総原価 / (1 - Shopee手数料率 - 目標粗利率)
+ * 粗利率 = (売値×(1-手数料率) - 総原価) / 売値
  */
-export function calculatePricing(
+export function calculateMarketPricing(
   input: PricingInput,
-  settings: AppSettings,
+  market: Market,
+  settings: Pick<AppSettings, "volumetric_divisor" | "amazon_domestic_shipping_jpy">,
   rates: ShippingRate[]
 ): PricingResult {
   const warnings: string[] = [];
-  const {
-    fx_rate_jpy_per_store: fx,
-    payment_fee_rate: fee,
-    target_margin_rate: target,
-    domestic_shipping_jpy: domestic,
-    volumetric_divisor: divisor,
-    default_carrier: carrier,
-    store_currency,
-  } = settings;
+  const fx = market.fx_rate_jpy;
+  const fee = market.fee_rate;
+  const target = market.target_margin_rate;
+  const domestic = market.domestic_cost_jpy + settings.amazon_domestic_shipping_jpy;
 
   const purchase = input.purchasePriceJpy ?? 0;
   if (input.purchasePriceJpy === null) {
-    warnings.push("仕入価格が未設定 (原価0で仮計算)");
+    warnings.push("Amazon価格が未設定 (原価0で仮計算)");
   }
 
-  const volG = volumetricWeightG(input.lengthCm, input.widthCm, input.heightCm, divisor);
+  const volG = volumetricWeightG(
+    input.lengthCm, input.widthCm, input.heightCm, settings.volumetric_divisor
+  );
   const actualG = input.weightG ?? 0;
   if (input.weightG === null) warnings.push("重量が未設定");
   const chargeableG = Math.max(actualG, volG ?? 0);
 
   const intl = chargeableG > 0
-    ? lookupIntlShipping(chargeableG, carrier, rates, warnings)
+    ? lookupIntlShipping(chargeableG, market.shipping_carrier, rates, warnings)
     : 0;
   if (chargeableG === 0) warnings.push("重量・寸法とも不明のため国際送料を0で仮計算");
 
   const totalJpy = purchase + domestic + intl;
-  const totalStore = fx > 0 ? totalJpy / fx : 0;
+  const totalMarket = fx > 0 ? totalJpy / fx : 0;
   if (fx <= 0) warnings.push("為替レートが不正です");
 
   const denominator = 1 - fee - target;
   let recommendedPrice: number | null = null;
   if (denominator > 0.01) {
-    recommendedPrice = Math.ceil((totalStore / denominator) * 100) / 100;
+    recommendedPrice = Math.ceil((totalMarket / denominator) * 100) / 100;
   } else {
     warnings.push("手数料率+目標粗利率が100%近くのため推奨売値を計算できません");
   }
 
-  let grossMarginAmount: number | null = null;
+  const evalPrice = input.listedPrice ?? recommendedPrice;
   let grossMarginRate: number | null = null;
   let marginAlert = false;
-  const listed = input.currentListedPrice;
-  if (listed !== null && listed > 0) {
-    grossMarginAmount = Math.round((listed * (1 - fee) - totalStore) * 100) / 100;
-    grossMarginRate = Math.round((grossMarginAmount / listed) * 1000) / 1000;
-    marginAlert = grossMarginAmount < 0;
-  } else {
-    warnings.push("現状売値が未設定のため粗利を計算できません");
+  if (evalPrice !== null && evalPrice > 0) {
+    const marginAmount = evalPrice * (1 - fee) - totalMarket;
+    grossMarginRate = Math.round((marginAmount / evalPrice) * 1000) / 1000;
+    marginAlert = marginAmount < 0;
   }
 
   return {
     recommendedPrice,
-    grossMarginAmount,
     grossMarginRate,
     marginAlert,
     breakdown: {
       purchase_price_jpy: purchase,
-      domestic_shipping_jpy: domestic,
+      domestic_cost_jpy: domestic,
       intl_shipping_jpy: intl,
       chargeable_weight_g: chargeableG,
       volumetric_weight_g: volG,
       total_cost_jpy: totalJpy,
-      total_cost_store: Math.round(totalStore * 100) / 100,
-      fx_rate_jpy_per_store: fx,
-      payment_fee_rate: fee,
+      total_cost_market: Math.round(totalMarket * 100) / 100,
+      fx_rate_jpy: fx,
+      fee_rate: fee,
       target_margin_rate: target,
-      carrier,
-      store_currency,
+      carrier: market.shipping_carrier,
+      currency: market.currency,
       warnings,
     },
   };

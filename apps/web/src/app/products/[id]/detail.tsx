@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { Product, ProductImage } from "@/lib/types";
+import type { Market, MarketListing, Product, ProductImage } from "@/lib/types";
 
 const IMAGE_STATUS_LABEL: Record<ProductImage["status"], { label: string; cls: string }> = {
   pending: { label: "未処理", cls: "bg-gray-100 text-gray-600" },
@@ -20,22 +20,23 @@ const IMAGE_STATUS_LABEL: Record<ProductImage["status"], { label: string; cls: s
 export function ProductDetail({
   product,
   images,
-  currency,
+  listings,
+  markets,
 }: {
   product: Product;
   images: ProductImage[];
-  currency: string;
+  listings: MarketListing[];
+  markets: Market[];
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [form, setForm] = useState({
-    inventory_qty: product.inventory_qty,
-    purchase_status: product.purchase_status,
-    restock_recheck_flag: product.restock_recheck_flag,
-    current_listed_price: product.current_listed_price ?? "",
     purchase_price_jpy: product.purchase_price_jpy ?? "",
+    source_stock_status: product.source_stock_status,
     weight_g: product.weight_g ?? "",
+    shopee_category_id: product.shopee_category_id ?? "",
+    note: product.note ?? "",
   });
 
   const save = async () => {
@@ -46,17 +47,18 @@ export function ProductDetail({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          inventory_qty: Number(form.inventory_qty) || 0,
-          purchase_status: form.purchase_status,
-          restock_recheck_flag: form.restock_recheck_flag,
-          current_listed_price: form.current_listed_price === "" ? null : Number(form.current_listed_price),
-          purchase_price_jpy: form.purchase_price_jpy === "" ? null : Number(form.purchase_price_jpy),
+          purchase_price_jpy:
+            form.purchase_price_jpy === "" ? null : Number(form.purchase_price_jpy),
+          source_stock_status: form.source_stock_status,
           weight_g: form.weight_g === "" ? null : Number(form.weight_g),
+          shopee_category_id:
+            form.shopee_category_id === "" ? null : Number(form.shopee_category_id),
+          note: form.note || null,
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error);
-      setMessage("保存しました (粗利も再計算済み)");
+      setMessage("保存しました (市場別の粗利も再計算済み)");
       router.refresh();
     } catch (e) {
       setMessage(`エラー: ${e instanceof Error ? e.message : String(e)}`);
@@ -84,8 +86,6 @@ export function ProductDetail({
     }
   };
 
-  const bd = product.pricing_breakdown;
-
   return (
     <div className="max-w-4xl space-y-6">
       <div>
@@ -93,7 +93,14 @@ export function ProductDetail({
           ← 商品一覧へ戻る
         </Link>
         <h2 className="mt-1 text-lg font-bold">{product.title}</h2>
-        <p className="font-mono text-xs text-gray-500">SKU: {product.sku}</p>
+        <p className="font-mono text-xs text-gray-500">
+          ASIN: {product.sku}
+          {product.amazon_url && (
+            <a href={product.amazon_url} target="_blank" className="ml-2 text-blue-700 hover:underline">
+              Amazonで開く ↗
+            </a>
+          )}
+        </p>
       </div>
 
       {message && (
@@ -113,60 +120,14 @@ export function ProductDetail({
               </li>
             ))}
           </ul>
-          {product.compliance_bootleg_suspect && (
-            <p className="mt-2 text-xs text-red-700 font-medium">
-              ⚠ 偽物・ブートレグの出品は Shopify AUP 違反であり、決済停止・アカウント凍結のリスクがあります。
-            </p>
-          )}
         </div>
       )}
 
       <section className="rounded border border-gray-200 bg-white p-4">
-        <h3 className="text-sm font-bold mb-3">在庫・価格 (手動編集)</h3>
+        <h3 className="text-sm font-bold mb-3">仕入れ情報 (手動編集)</h3>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
           <label className="block">
-            <span className="text-xs text-gray-500">在庫数</span>
-            <input
-              type="number"
-              value={form.inventory_qty}
-              onChange={(e) => setForm({ ...form, inventory_qty: Number(e.target.value) })}
-              className="mt-1 w-full rounded border border-gray-300 px-2 py-1"
-            />
-          </label>
-          <label className="block">
-            <span className="text-xs text-gray-500">仕入れ状態</span>
-            <select
-              value={form.purchase_status}
-              onChange={(e) =>
-                setForm({ ...form, purchase_status: e.target.value as Product["purchase_status"] })
-              }
-              className="mt-1 w-full rounded border border-gray-300 px-2 py-1 bg-white"
-            >
-              <option value="unpurchased">未仕入</option>
-              <option value="ordered">発注済</option>
-              <option value="in_stock">在庫あり</option>
-            </select>
-          </label>
-          <label className="flex items-end gap-2 pb-1">
-            <input
-              type="checkbox"
-              checked={form.restock_recheck_flag}
-              onChange={(e) => setForm({ ...form, restock_recheck_flag: e.target.checked })}
-            />
-            <span className="text-xs">元メルカリ在庫の再確認が必要</span>
-          </label>
-          <label className="block">
-            <span className="text-xs text-gray-500">現状売値 ({currency})</span>
-            <input
-              type="number"
-              step="0.01"
-              value={form.current_listed_price}
-              onChange={(e) => setForm({ ...form, current_listed_price: e.target.value })}
-              className="mt-1 w-full rounded border border-gray-300 px-2 py-1"
-            />
-          </label>
-          <label className="block">
-            <span className="text-xs text-gray-500">仕入価格 (JPY)</span>
+            <span className="text-xs text-gray-500">Amazon価格 (JPY)</span>
             <input
               type="number"
               value={form.purchase_price_jpy}
@@ -175,11 +136,42 @@ export function ProductDetail({
             />
           </label>
           <label className="block">
+            <span className="text-xs text-gray-500">Amazon在庫</span>
+            <select
+              value={form.source_stock_status}
+              onChange={(e) =>
+                setForm({ ...form, source_stock_status: e.target.value as Product["source_stock_status"] })
+              }
+              className="mt-1 w-full rounded border border-gray-300 px-2 py-1 bg-white"
+            >
+              <option value="in_stock">あり</option>
+              <option value="out_of_stock">切れ (Shopee在庫0にする)</option>
+              <option value="unknown">不明</option>
+            </select>
+          </label>
+          <label className="block">
             <span className="text-xs text-gray-500">実重量 (g)</span>
             <input
               type="number"
               value={form.weight_g}
               onChange={(e) => setForm({ ...form, weight_g: e.target.value })}
+              className="mt-1 w-full rounded border border-gray-300 px-2 py-1"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs text-gray-500">ShopeeカテゴリID (一括アップロードに必要)</span>
+            <input
+              type="number"
+              value={form.shopee_category_id}
+              onChange={(e) => setForm({ ...form, shopee_category_id: e.target.value })}
+              className="mt-1 w-full rounded border border-gray-300 px-2 py-1"
+            />
+          </label>
+          <label className="block col-span-2">
+            <span className="text-xs text-gray-500">メモ</span>
+            <input
+              value={form.note}
+              onChange={(e) => setForm({ ...form, note: e.target.value })}
               className="mt-1 w-full rounded border border-gray-300 px-2 py-1"
             />
           </label>
@@ -191,55 +183,6 @@ export function ProductDetail({
         >
           保存して再計算
         </button>
-      </section>
-
-      <section className="rounded border border-gray-200 bg-white p-4">
-        <h3 className="text-sm font-bold mb-3">粗利内訳</h3>
-        {bd ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-            <Stat label="仕入" value={`¥${bd.purchase_price_jpy.toLocaleString()}`} />
-            <Stat label="国内送料" value={`¥${bd.domestic_shipping_jpy.toLocaleString()}`} />
-            <Stat
-              label={`国際送料 (${bd.carrier})`}
-              value={`¥${bd.intl_shipping_jpy.toLocaleString()}`}
-            />
-            <Stat label="課金重量" value={`${bd.chargeable_weight_g}g`} />
-            <Stat label="総原価" value={`${bd.total_cost_store} ${bd.store_currency}`} />
-            <Stat
-              label="推奨売値"
-              value={
-                product.recommended_price !== null
-                  ? `${product.recommended_price} ${bd.store_currency}`
-                  : "—"
-              }
-            />
-            <Stat
-              label="現状売値の粗利率"
-              value={
-                product.gross_margin_rate !== null
-                  ? `${(product.gross_margin_rate * 100).toFixed(1)}%${product.margin_alert ? " ⚠赤字" : ""}`
-                  : "—"
-              }
-            />
-            <Stat
-              label="売値乖離"
-              value={
-                product.recommended_price !== null && product.current_listed_price !== null
-                  ? `${(product.current_listed_price - product.recommended_price).toFixed(2)}`
-                  : "—"
-              }
-            />
-          </div>
-        ) : (
-          <p className="text-sm text-gray-400">未計算 (一覧の「全件再計算」を実行)</p>
-        )}
-        {bd && bd.warnings.length > 0 && (
-          <ul className="mt-3 list-disc pl-5 text-xs text-amber-700 space-y-0.5">
-            {bd.warnings.map((w, i) => (
-              <li key={i}>{w}</li>
-            ))}
-          </ul>
-        )}
         <p className="mt-2 text-xs text-gray-500">
           重量: {product.weight_g ?? "—"}g ({sourceLabel(product.weight_source)}) / 寸法:{" "}
           {product.length_cm ?? "—"}×{product.width_cm ?? "—"}×{product.height_cm ?? "—"}cm (
@@ -248,16 +191,76 @@ export function ProductDetail({
       </section>
 
       <section className="rounded border border-gray-200 bg-white p-4">
+        <h3 className="text-sm font-bold mb-3">市場別の出品・粗利</h3>
+        <div className="space-y-4">
+          {listings.map((l) => {
+            const market = markets.find((m) => m.code === l.market_code);
+            const bd = l.pricing_breakdown;
+            return (
+              <div key={l.id} className="rounded border border-gray-100 p-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="font-bold text-sm">
+                    {l.market_code} ({market?.currency ?? ""})
+                  </span>
+                  <span className="text-xs rounded bg-gray-100 px-1.5 py-0.5">{l.status}</span>
+                </div>
+                {l.last_error && (
+                  <p className="mb-2 text-xs text-red-600 break-all">エラー: {l.last_error}</p>
+                )}
+                {bd ? (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                    <Stat label="Amazon価格" value={`¥${bd.purchase_price_jpy.toLocaleString()}`} />
+                    <Stat label="国内費用" value={`¥${bd.domestic_cost_jpy.toLocaleString()}`} />
+                    <Stat label={`国際送料 (${bd.carrier})`} value={`¥${bd.intl_shipping_jpy.toLocaleString()}`} />
+                    <Stat label="課金重量" value={`${bd.chargeable_weight_g}g`} />
+                    <Stat label="総原価" value={`${bd.total_cost_market} ${bd.currency}`} />
+                    <Stat
+                      label="推奨売値"
+                      value={l.recommended_price !== null ? `${l.recommended_price} ${bd.currency}` : "—"}
+                    />
+                    <Stat
+                      label="出品価格"
+                      value={l.listed_price !== null ? `${l.listed_price} ${bd.currency}` : "(未出品)"}
+                    />
+                    <Stat
+                      label="粗利率"
+                      value={
+                        l.gross_margin_rate !== null
+                          ? `${(l.gross_margin_rate * 100).toFixed(1)}%${l.margin_alert ? " ⚠赤字" : ""}`
+                          : "—"
+                      }
+                    />
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400">未計算</p>
+                )}
+                {bd && bd.warnings.length > 0 && (
+                  <ul className="mt-2 list-disc pl-5 text-xs text-amber-700 space-y-0.5">
+                    {bd.warnings.map((w, i) => (
+                      <li key={i}>{w}</li>
+                    ))}
+                  </ul>
+                )}
+                <p className="mt-2 text-xs text-gray-500">Shopee表示在庫: {l.stock}</p>
+              </div>
+            );
+          })}
+          {listings.length === 0 && (
+            <p className="text-sm text-gray-400">
+              市場別出品がありません。「全件再計算」を実行するか、設定画面で市場を有効化してください
+            </p>
+          )}
+        </div>
+      </section>
+
+      <section className="rounded border border-gray-200 bg-white p-4">
         <h3 className="text-sm font-bold mb-3">画像 ({images.length}件)</h3>
-        {images.length === 0 && (
-          <p className="text-sm text-gray-400">画像URLがありません</p>
-        )}
+        {images.length === 0 && <p className="text-sm text-gray-400">画像URLがありません</p>}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {images.map((img) => {
             const st = IMAGE_STATUS_LABEL[img.status];
             return (
               <div key={img.id} className="rounded border border-gray-200 p-2 space-y-2">
-                {/* 加工済みがあれば表示、なければ元URL */}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={img.processed_url ?? img.source_url}
@@ -281,15 +284,6 @@ export function ProductDetail({
                       再処理
                     </button>
                   )}
-                  {img.transparent_url && (
-                    <a
-                      href={img.transparent_url}
-                      target="_blank"
-                      className="rounded border border-gray-300 px-2 py-0.5 hover:bg-gray-100"
-                    >
-                      透過PNG
-                    </a>
-                  )}
                 </div>
               </div>
             );
@@ -297,13 +291,10 @@ export function ProductDetail({
         </div>
       </section>
 
-      {product.description_html && (
+      {product.description_raw && (
         <section className="rounded border border-gray-200 bg-white p-4">
-          <h3 className="text-sm font-bold mb-3">説明文 (Body HTML プレビュー)</h3>
-          <div
-            className="prose prose-sm max-w-none text-sm"
-            dangerouslySetInnerHTML={{ __html: product.description_html }}
-          />
+          <h3 className="text-sm font-bold mb-3">説明文</h3>
+          <p className="whitespace-pre-wrap text-sm">{product.description_raw}</p>
         </section>
       )}
     </div>
